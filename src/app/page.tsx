@@ -1,14 +1,12 @@
 'use client'
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useSyncExternalStore } from 'react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Separator } from '@/components/ui/separator'
-import { Switch } from '@/components/ui/switch'
 import {
   Select,
   SelectContent,
@@ -23,7 +21,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 import {
   Table,
@@ -34,8 +31,6 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Calendar } from '@/components/ui/calendar'
 import { toast } from '@/hooks/use-toast'
 import {
   BarChart3,
@@ -48,19 +43,19 @@ import {
   Edit3,
   Save,
   X,
-  CalendarIcon,
   TrendingUp,
   TrendingDown,
   Package,
   RefreshCw,
   Settings,
   Download,
-  ChevronDown,
   ArrowUpDown,
   Search,
-  Filter,
   Sun,
   Moon,
+  Check,
+  Copy,
+  Rows3,
 } from 'lucide-react'
 import {
   BarChart,
@@ -74,12 +69,9 @@ import {
   PieChart,
   Pie,
   Cell,
-  LineChart,
-  Line,
   Area,
   AreaChart,
 } from 'recharts'
-import { format } from 'date-fns'
 import {
   INWARD_TYPES,
   OUTWARD_TYPES,
@@ -87,19 +79,47 @@ import {
   CATEGORIES,
   type EntryWithItem,
   type InventoryItemWithSubTypes,
-  getTodayString,
   formatDate,
   formatTimestamp,
 } from '@/lib/inventory-types'
 
-// Chart colors
 const CHART_COLORS = ['#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#f97316', '#ec4899', '#6366f1', '#14b8a6', '#e11d48', '#84cc16', '#a855f7']
 
 type Item = InventoryItemWithSubTypes
 type Entry = EntryWithItem
 
+// Hook to avoid hydration mismatch using useSyncExternalStore (React 19 compliant)
+const emptySubscribe = () => () => {}
+function useMounted() {
+  return useSyncExternalStore(emptySubscribe, () => true, () => false)
+}
+
+// Get today deterministically on client only
+function useTodayString() {
+  const mounted = useMounted()
+  return mounted ? `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}` : ''
+}
+
+// Quick-fill row type for inline entry
+interface QuickRow {
+  id: string
+  itemId: string
+  type: string
+  qty: string
+  unit: string
+  remarks: string
+  box: string
+}
+
+let rowIdCounter = 0
+function newQuickRow(): QuickRow {
+  return { id: `qr-${++rowIdCounter}`, itemId: '', type: '', qty: '', unit: 'Pack', remarks: '', box: '' }
+}
+
 export default function InventoryApp() {
-  // State
+  const mounted = useMounted()
+  const todayStr = useTodayString()
+
   const [activeTab, setActiveTab] = useState('dashboard')
   const [items, setItems] = useState<Item[]>([])
   const [inwardEntries, setInwardEntries] = useState<Entry[]>([])
@@ -109,125 +129,75 @@ export default function InventoryApp() {
   const [loading, setLoading] = useState(true)
   const [darkMode, setDarkMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [compactMode, setCompactMode] = useState(false)
 
   // Date filters
   const [inwardDateFilter, setInwardDateFilter] = useState<{ start: string; end: string }>({ start: '', end: '' })
   const [outwardDateFilter, setOutwardDateFilter] = useState<{ start: string; end: string }>({ start: '', end: '' })
   const [analyticsDateFilter, setAnalyticsDateFilter] = useState<{ start: string; end: string }>({ start: '', end: '' })
-  const [closingDate, setClosingDate] = useState(getTodayString())
+  const [closingDate, setClosingDate] = useState('')
+
+  // Inline quick-fill rows for Inwards
+  const [inwardRows, setInwardRows] = useState<QuickRow[]>([newQuickRow()])
+  const [inwardEntryDate, setInwardEntryDate] = useState('')
+
+  // Inline quick-fill rows for Outwards
+  const [outwardRows, setOutwardRows] = useState<QuickRow[]>([newQuickRow()])
+  const [outwardEntryDate, setOutwardEntryDate] = useState('')
+
+  // Inline quick-fill rows for Closing
+  const [closingRows, setClosingRows] = useState<QuickRow[]>([newQuickRow()])
+  const [closingEntryDate, setClosingEntryDate] = useState('')
 
   // Edit states
   const [editingCell, setEditingCell] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
 
-  // Dialog states
-  const [inwardDialogOpen, setInwardDialogOpen] = useState(false)
-  const [outwardDialogOpen, setOutwardDialogOpen] = useState(false)
-  const [itemDialogOpen, setItemDialogOpen] = useState(false)
-  const [closingDialogOpen, setClosingDialogOpen] = useState(false)
+  // Delete dialog
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{ type: string; id: string } | null>(null)
 
-  // Form states
-  const [inwardForm, setInwardForm] = useState({ itemId: '', type: '', qty: '', unit: 'Pack', remarks: '', date: getTodayString() })
-  const [outwardForm, setOutwardForm] = useState({ itemId: '', type: '', qty: '', unit: 'Pack', remarks: '', date: getTodayString() })
+  // Add item dialog
+  const [itemDialogOpen, setItemDialogOpen] = useState(false)
   const [itemForm, setItemForm] = useState({ name: '', category: 'Health', unitType: 'Pack', subTypes: '' })
-  const [closingForm, setClosingForm] = useState({ itemId: '', type: '', qty: '', unit: 'Box', box: '', date: getTodayString() })
 
-  // Customization
-  const [compactMode, setCompactMode] = useState(false)
+  // Initialize dates lazily (client-only to avoid hydration mismatch)
+  const [datesInitialized, setDatesInitialized] = useState(false)
+  if (mounted && !datesInitialized) {
+    setDatesInitialized(true)
+    const t = todayStr
+    setClosingDate(t)
+    setInwardEntryDate(t)
+    setOutwardEntryDate(t)
+    setClosingEntryDate(t)
+  }
 
-  // Fetch functions
-  const fetchItems = useCallback(async () => {
-    try {
-      const res = await fetch('/api/items')
-      if (res.ok) setItems(await res.json())
-    } catch (e) { console.error(e) }
-  }, [])
-
-  const fetchInwards = useCallback(async () => {
-    try {
-      const params = new URLSearchParams()
-      if (inwardDateFilter.start) params.set('startDate', inwardDateFilter.start)
-      if (inwardDateFilter.end) params.set('endDate', inwardDateFilter.end)
-      const res = await fetch(`/api/inwards?${params}`)
-      if (res.ok) setInwardEntries(await res.json())
-    } catch (e) { console.error(e) }
-  }, [inwardDateFilter])
-
-  const fetchOutwards = useCallback(async () => {
-    try {
-      const params = new URLSearchParams()
-      if (outwardDateFilter.start) params.set('startDate', outwardDateFilter.start)
-      if (outwardDateFilter.end) params.set('endDate', outwardDateFilter.end)
-      const res = await fetch(`/api/outwards?${params}`)
-      if (res.ok) setOutwardEntries(await res.json())
-    } catch (e) { console.error(e) }
-  }, [outwardDateFilter])
-
-  const fetchClosing = useCallback(async () => {
-    try {
-      const params = new URLSearchParams()
-      if (closingDate) params.set('date', closingDate)
-      const res = await fetch(`/api/closing?${params}`)
-      if (res.ok) setClosingEntries(await res.json())
-    } catch (e) { console.error(e) }
-  }, [closingDate])
-
-  const fetchAnalytics = useCallback(async () => {
-    try {
-      const params = new URLSearchParams()
-      if (analyticsDateFilter.start) params.set('startDate', analyticsDateFilter.start)
-      if (analyticsDateFilter.end) params.set('endDate', analyticsDateFilter.end)
-      const res = await fetch(`/api/analytics?${params}`)
-      if (res.ok) setAnalytics(await res.json())
-    } catch (e) { console.error(e) }
-  }, [analyticsDateFilter])
-
-  const fetchAllData = useCallback(async () => {
-    setLoading(true)
-    await Promise.all([fetchItems(), fetchInwards(), fetchOutwards(), fetchClosing(), fetchAnalytics()])
-    setLoading(false)
-  }, [fetchItems, fetchInwards, fetchOutwards, fetchClosing, fetchAnalytics])
-
-  // Seed database on first load
-  const hasSeeded = React.useRef(false)
-  useEffect(() => {
-    if (hasSeeded.current) return
-    hasSeeded.current = true
-    const seedIfEmpty = async () => {
-      try {
-        const checkRes = await fetch('/api/items')
-        if (checkRes.ok) {
-          const existing = await checkRes.json()
-          if (existing.length === 0) {
-            const res = await fetch('/api/seed', { method: 'POST' })
-            if (res.ok) {
-              toast({ title: 'Database seeded with sample data' })
-              fetchItems()
-            }
-          }
-        }
-      } catch (e) { console.error(e) }
-    }
-    seedIfEmpty()
-  }, [fetchItems])
-
-  // Track a refresh key to trigger data fetching
+  // Fetch all data
   const [refreshKey, setRefreshKey] = useState(0)
   const refreshData = useCallback(() => setRefreshKey(k => k + 1), [])
 
-  // Fetch all data on mount and when filters/refreshKey change
   useEffect(() => {
     const load = async () => {
       setLoading(true)
       try {
+        const iParams = new URLSearchParams()
+        if (inwardDateFilter.start) iParams.set('startDate', inwardDateFilter.start)
+        if (inwardDateFilter.end) iParams.set('endDate', inwardDateFilter.end)
+        const oParams = new URLSearchParams()
+        if (outwardDateFilter.start) oParams.set('startDate', outwardDateFilter.start)
+        if (outwardDateFilter.end) oParams.set('endDate', outwardDateFilter.end)
+        const cParams = new URLSearchParams()
+        if (closingDate) cParams.set('date', closingDate)
+        const aParams = new URLSearchParams()
+        if (analyticsDateFilter.start) aParams.set('startDate', analyticsDateFilter.start)
+        if (analyticsDateFilter.end) aParams.set('endDate', analyticsDateFilter.end)
+
         const [itemsRes, inwardsRes, outwardsRes, closingRes, analyticsRes] = await Promise.all([
           fetch('/api/items'),
-          fetch(`/api/inwards?${new URLSearchParams(Object.entries(inwardDateFilter).filter(([, v]) => v)).toString()}`),
-          fetch(`/api/outwards?${new URLSearchParams(Object.entries(outwardDateFilter).filter(([, v]) => v)).toString()}`),
-          fetch(`/api/closing?${closingDate ? `date=${closingDate}` : ''}`),
-          fetch(`/api/analytics?${new URLSearchParams(Object.entries(analyticsDateFilter).filter(([, v]) => v)).toString()}`),
+          fetch(`/api/inwards?${iParams}`),
+          fetch(`/api/outwards?${oParams}`),
+          fetch(`/api/closing?${cParams}`),
+          fetch(`/api/analytics?${aParams}`),
         ])
         if (itemsRes.ok) setItems(await itemsRes.json())
         if (inwardsRes.ok) setInwardEntries(await inwardsRes.json())
@@ -238,91 +208,139 @@ export default function InventoryApp() {
       setLoading(false)
     }
     load()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey, inwardDateFilter, outwardDateFilter, closingDate, analyticsDateFilter])
 
-  // Dark mode toggle
+  // Seed on first load
+  useEffect(() => {
+    if (!mounted) return
+    const seedIfEmpty = async () => {
+      try {
+        const res = await fetch('/api/items')
+        if (res.ok) {
+          const existing = await res.json()
+          if (existing.length === 0) {
+            const seedRes = await fetch('/api/seed', { method: 'POST' })
+            if (seedRes.ok) {
+              toast({ title: 'Sample data loaded' })
+              refreshData()
+            }
+          }
+        }
+      } catch (e) { console.error(e) }
+    }
+    seedIfEmpty()
+  }, [mounted, refreshData])
+
+  // Dark mode
   useEffect(() => {
     document.documentElement.classList.toggle('dark', darkMode)
   }, [darkMode])
 
-  // Auto-refresh every 30 seconds
+  // Auto-refresh
   useEffect(() => {
-    const interval = setInterval(() => {
-      fetchAllData()
-    }, 30000)
+    const interval = setInterval(() => refreshData(), 30000)
     return () => clearInterval(interval)
-  }, [fetchAllData])
+  }, [refreshData])
 
-  // CRUD handlers
-  const handleAddInward = async () => {
-    if (!inwardForm.itemId || !inwardForm.type || !inwardForm.qty) {
-      toast({ title: 'Error', description: 'Please fill all required fields', variant: 'destructive' })
+  // ─── Inline row helpers ───
+  const updateRow = (setter: React.Dispatch<React.SetStateAction<QuickRow[]>>, rowId: string, field: keyof QuickRow, value: string) => {
+    setter(prev => prev.map(r => r.id === rowId ? { ...r, [field]: value } : r))
+  }
+
+  const addRow = (setter: React.Dispatch<React.SetStateAction<QuickRow[]>>) => {
+    setter(prev => [...prev, newQuickRow()])
+  }
+
+  const removeRow = (setter: React.Dispatch<React.SetStateAction<QuickRow[]>>, rowId: string) => {
+    setter(prev => prev.length > 1 ? prev.filter(r => r.id !== rowId) : prev)
+  }
+
+  const duplicateLastRow = (setter: React.Dispatch<React.SetStateAction<QuickRow[]>>) => {
+    setter(prev => {
+      const last = prev[prev.length - 1]
+      return [...prev, { ...last, id: `qr-${++rowIdCounter}`, qty: '' }]
+    })
+  }
+
+  // ─── Submit handlers ───
+  const submitInwardRows = async () => {
+    const validRows = inwardRows.filter(r => r.itemId && r.type && r.qty)
+    if (validRows.length === 0) {
+      toast({ title: 'Error', description: 'Fill at least one row with Item, Type, and Qty', variant: 'destructive' })
       return
     }
     try {
-      const res = await fetch('/api/inwards', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(inwardForm),
-      })
-      if (res.ok) {
-        toast({ title: 'Inward entry added successfully' })
-        setInwardDialogOpen(false)
-        setInwardForm({ itemId: '', type: '', qty: '', unit: 'Pack', remarks: '', date: getTodayString() })
-        fetchInwards()
-        fetchAnalytics()
-        fetchClosing()
+      const results = await Promise.all(
+        validRows.map(row =>
+          fetch('/api/inwards', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ itemId: row.itemId, type: row.type, qty: row.qty, unit: row.unit, remarks: row.remarks, date: inwardEntryDate }),
+          })
+        )
+      )
+      const allOk = results.every(r => r.ok)
+      if (allOk) {
+        toast({ title: `${validRows.length} inward entries added` })
+        setInwardRows([newQuickRow()])
+        refreshData()
       }
     } catch (e) { console.error(e) }
   }
 
-  const handleAddOutward = async () => {
-    if (!outwardForm.itemId || !outwardForm.type || !outwardForm.qty) {
-      toast({ title: 'Error', description: 'Please fill all required fields', variant: 'destructive' })
+  const submitOutwardRows = async () => {
+    const validRows = outwardRows.filter(r => r.itemId && r.type && r.qty)
+    if (validRows.length === 0) {
+      toast({ title: 'Error', description: 'Fill at least one row with Item, Type, and Qty', variant: 'destructive' })
       return
     }
     try {
-      const res = await fetch('/api/outwards', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(outwardForm),
-      })
-      if (res.ok) {
-        toast({ title: 'Outward entry added successfully' })
-        setOutwardDialogOpen(false)
-        setOutwardForm({ itemId: '', type: '', qty: '', unit: 'Pack', remarks: '', date: getTodayString() })
-        fetchOutwards()
-        fetchAnalytics()
-        fetchClosing()
+      const results = await Promise.all(
+        validRows.map(row =>
+          fetch('/api/outwards', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ itemId: row.itemId, type: row.type, qty: row.qty, unit: row.unit, remarks: row.remarks, date: outwardEntryDate }),
+          })
+        )
+      )
+      const allOk = results.every(r => r.ok)
+      if (allOk) {
+        toast({ title: `${validRows.length} outward entries added` })
+        setOutwardRows([newQuickRow()])
+        refreshData()
       }
     } catch (e) { console.error(e) }
   }
 
-  const handleAddClosing = async () => {
-    if (!closingForm.itemId || !closingForm.type || !closingForm.qty) {
-      toast({ title: 'Error', description: 'Please fill all required fields', variant: 'destructive' })
+  const submitClosingRows = async () => {
+    const validRows = closingRows.filter(r => r.itemId && r.type && r.qty)
+    if (validRows.length === 0) {
+      toast({ title: 'Error', description: 'Fill at least one row', variant: 'destructive' })
       return
     }
     try {
-      const res = await fetch('/api/closing', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(closingForm),
-      })
-      if (res.ok) {
-        toast({ title: 'Closing inventory entry added' })
-        setClosingDialogOpen(false)
-        setClosingForm({ itemId: '', type: '', qty: '', unit: 'Box', box: '', date: getTodayString() })
-        fetchClosing()
-        fetchAnalytics()
+      const results = await Promise.all(
+        validRows.map(row =>
+          fetch('/api/closing', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ itemId: row.itemId, type: row.type, qty: row.qty, unit: row.unit, box: row.box, date: closingEntryDate }),
+          })
+        )
+      )
+      const allOk = results.every(r => r.ok)
+      if (allOk) {
+        toast({ title: `${validRows.length} closing entries added` })
+        setClosingRows([newQuickRow()])
+        refreshData()
       }
     } catch (e) { console.error(e) }
   }
 
   const handleAddItem = async () => {
     if (!itemForm.name || !itemForm.category) {
-      toast({ title: 'Error', description: 'Please fill all required fields', variant: 'destructive' })
+      toast({ title: 'Error', description: 'Name and category required', variant: 'destructive' })
       return
     }
     try {
@@ -333,10 +351,10 @@ export default function InventoryApp() {
         body: JSON.stringify({ ...itemForm, subTypes }),
       })
       if (res.ok) {
-        toast({ title: 'Item added successfully' })
+        toast({ title: 'Item added' })
         setItemDialogOpen(false)
         setItemForm({ name: '', category: 'Health', unitType: 'Pack', subTypes: '' })
-        fetchItems()
+        refreshData()
       }
     } catch (e) { console.error(e) }
   }
@@ -346,77 +364,48 @@ export default function InventoryApp() {
     try {
       const res = await fetch(`/api/${deleteTarget.type}?id=${deleteTarget.id}`, { method: 'DELETE' })
       if (res.ok) {
-        toast({ title: 'Entry deleted successfully' })
+        toast({ title: 'Deleted' })
         setDeleteDialogOpen(false)
         setDeleteTarget(null)
-        fetchInwards()
-        fetchOutwards()
-        fetchClosing()
-        fetchAnalytics()
+        refreshData()
       }
     } catch (e) { console.error(e) }
   }
 
-  const handleClosingEdit = async (id: string, field: 'qty' | 'box', value: string) => {
+  const handleCellEdit = async (api: string, id: string, field: string, value: string) => {
     try {
-      const res = await fetch('/api/closing', {
+      const res = await fetch(`/api/${api}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, [field]: value }),
       })
       if (res.ok) {
-        toast({ title: 'Updated successfully' })
+        toast({ title: 'Updated' })
         setEditingCell(null)
-        fetchClosing()
-      }
-    } catch (e) { console.error(e) }
-  }
-
-  const handleRemarksEdit = async (type: 'inwards' | 'outwards', id: string, remarks: string) => {
-    try {
-      const res = await fetch(`/api/${type}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, remarks }),
-      })
-      if (res.ok) {
-        toast({ title: 'Remarks updated' })
-        setEditingCell(null)
-        if (type === 'inwards') fetchInwards()
-        else fetchOutwards()
+        refreshData()
       }
     } catch (e) { console.error(e) }
   }
 
   const handleExportCSV = (data: Entry[], filename: string) => {
     const headers = ['Item Name', 'Type', 'Qty', 'Unit', 'Remarks', 'Box', 'Date', 'Timestamp']
-    const rows = data.map(e => [
-      e.item.name, e.type, e.qty, e.unit,
-      e.remarks || '', (e as EntryWithItem & { box?: string | null }).box || '',
-      formatDate(e.date), formatTimestamp(e.createdAt)
-    ])
+    const rows = data.map(e => [e.item.name, e.type, e.qty, e.unit, e.remarks || '', e.box || '', formatDate(e.date), formatTimestamp(e.createdAt)])
     const csv = [headers, ...rows].map(r => r.map(v => `"${v}"`).join(',')).join('\n')
     const blob = new Blob([csv], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${filename}_${getTodayString()}.csv`
+    a.download = `${filename}.csv`
     a.click()
     URL.revokeObjectURL(url)
   }
 
-  // Filter entries by search
   const filterEntries = (entries: Entry[]) => {
     if (!searchQuery) return entries
     const q = searchQuery.toLowerCase()
-    return entries.filter(e =>
-      e.item.name.toLowerCase().includes(q) ||
-      e.type.toLowerCase().includes(q) ||
-      (e.remarks && e.remarks.toLowerCase().includes(q))
-    )
+    return entries.filter(e => e.item.name.toLowerCase().includes(q) || e.type.toLowerCase().includes(q) || (e.remarks && e.remarks.toLowerCase().includes(q)))
   }
 
-  // Group closing entries by item
   const groupedClosing = closingEntries.reduce((acc, entry) => {
     const key = entry.item.name
     if (!acc[key]) acc[key] = []
@@ -432,165 +421,94 @@ export default function InventoryApp() {
   const inwardByItem = (analytics?.inwardByItem as { itemId: string; name: string; qty: number }[]) || []
   const outwardByItem = (analytics?.outwardByItem as { itemId: string; name: string; qty: number }[]) || []
 
-  const cellPad = compactMode ? 'p-1.5' : 'p-3'
-  const headerPad = compactMode ? 'p-1.5' : 'p-3'
+  const cp = compactMode ? 'px-2 py-1' : 'px-3 py-2'
+  const hp = compactMode ? 'px-2 py-1.5' : 'px-3 py-2.5'
+
+  // Don't render date-dependent content until client-side mount
+  if (!mounted) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="flex items-center gap-3 text-muted-foreground">
+          <RefreshCw className="h-5 w-5 animate-spin" />
+          <span>Loading inventory...</span>
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div className={`min-h-screen bg-background transition-colors duration-300`}>
+    <div className="min-h-screen bg-background transition-colors duration-300">
       {/* Header */}
       <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="flex h-16 items-center px-4 md:px-6 gap-4">
+        <div className="flex h-14 items-center px-4 md:px-6 gap-4">
           <div className="flex items-center gap-2">
-            <Package className="h-6 w-6 text-emerald-600" />
-            <h1 className="text-xl font-bold tracking-tight">Inventory Manager</h1>
+            <Package className="h-5 w-5 text-emerald-600" />
+            <h1 className="text-lg font-bold tracking-tight">Inventory Manager</h1>
           </div>
-
-          <div className="flex-1 flex items-center justify-center max-w-md mx-auto">
+          <div className="flex-1 flex items-center justify-center max-w-sm mx-auto">
             <div className="relative w-full">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search items, types, remarks..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9 bg-muted/50"
-              />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input placeholder="Search..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-9 h-8 bg-muted/50 text-sm" />
             </div>
           </div>
-
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" onClick={() => { refreshData() }} title="Refresh data">
-              <RefreshCw className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="icon" onClick={() => setDarkMode(!darkMode)} title="Toggle dark mode">
-              {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            </Button>
-            <Button variant="ghost" size="icon" onClick={() => setCompactMode(!compactMode)} title="Toggle compact mode">
-              <Settings className="h-4 w-4" />
-            </Button>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={refreshData}><RefreshCw className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setDarkMode(!darkMode)}>{darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setCompactMode(!compactMode)}><Settings className="h-4 w-4" /></Button>
           </div>
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="p-4 md:p-6 max-w-[1600px] mx-auto">
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+      <main className="p-3 md:p-6 max-w-[1600px] mx-auto">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-3">
           <TabsList className="grid w-full grid-cols-5 lg:w-auto lg:inline-grid">
-            <TabsTrigger value="dashboard" className="gap-1.5">
-              <LayoutDashboard className="h-4 w-4 hidden sm:block" />
-              Dashboard
-            </TabsTrigger>
-            <TabsTrigger value="inwards" className="gap-1.5">
-              <PackagePlus className="h-4 w-4 hidden sm:block" />
-              Inwards
-            </TabsTrigger>
-            <TabsTrigger value="outwards" className="gap-1.5">
-              <PackageMinus className="h-4 w-4 hidden sm:block" />
-              Outwards
-            </TabsTrigger>
-            <TabsTrigger value="closing" className="gap-1.5">
-              <Archive className="h-4 w-4 hidden sm:block" />
-              Closing
-            </TabsTrigger>
-            <TabsTrigger value="analytics" className="gap-1.5">
-              <BarChart3 className="h-4 w-4 hidden sm:block" />
-              Analytics
-            </TabsTrigger>
+            <TabsTrigger value="dashboard" className="gap-1 text-xs sm:text-sm"><LayoutDashboard className="h-4 w-4 hidden sm:block" />Dashboard</TabsTrigger>
+            <TabsTrigger value="inwards" className="gap-1 text-xs sm:text-sm"><PackagePlus className="h-4 w-4 hidden sm:block" />Inwards</TabsTrigger>
+            <TabsTrigger value="outwards" className="gap-1 text-xs sm:text-sm"><PackageMinus className="h-4 w-4 hidden sm:block" />Outwards</TabsTrigger>
+            <TabsTrigger value="closing" className="gap-1 text-xs sm:text-sm"><Archive className="h-4 w-4 hidden sm:block" />Closing</TabsTrigger>
+            <TabsTrigger value="analytics" className="gap-1 text-xs sm:text-sm"><BarChart3 className="h-4 w-4 hidden sm:block" />Analytics</TabsTrigger>
           </TabsList>
 
-          {/* ===== DASHBOARD TAB ===== */}
+          {/* ═══ DASHBOARD ═══ */}
           <TabsContent value="dashboard" className="space-y-4">
-            {/* Summary Cards */}
-            <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
-              <Card className="border-l-4 border-l-emerald-500">
-                <CardHeader className="pb-2">
-                  <CardDescription className="text-emerald-600 font-medium">Total Inward</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{summary?.totalInward || 0}</div>
-                  <div className="flex items-center text-xs text-muted-foreground mt-1">
-                    <TrendingUp className="h-3 w-3 mr-1 text-emerald-500" />
-                    Stock received
-                  </div>
-                </CardContent>
-              </Card>
-              <Card className="border-l-4 border-l-red-500">
-                <CardHeader className="pb-2">
-                  <CardDescription className="text-red-600 font-medium">Total Outward</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{summary?.totalOutward || 0}</div>
-                  <div className="flex items-center text-xs text-muted-foreground mt-1">
-                    <TrendingDown className="h-3 w-3 mr-1 text-red-500" />
-                    Stock dispatched
-                  </div>
-                </CardContent>
-              </Card>
-              <Card className="border-l-4 border-l-amber-500">
-                <CardHeader className="pb-2">
-                  <CardDescription className="text-amber-600 font-medium">Closing Stock</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{summary?.totalClosing || 0}</div>
-                  <div className="flex items-center text-xs text-muted-foreground mt-1">
-                    <Archive className="h-3 w-3 mr-1 text-amber-500" />
-                    Current stock
-                  </div>
-                </CardContent>
-              </Card>
-              <Card className="border-l-4 border-l-purple-500">
-                <CardHeader className="pb-2">
-                  <CardDescription className="text-purple-600 font-medium">Net Movement</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{summary?.netMovement || 0}</div>
-                  <div className="flex items-center text-xs text-muted-foreground mt-1">
-                    <ArrowUpDown className="h-3 w-3 mr-1 text-purple-500" />
-                    In - Out
-                  </div>
-                </CardContent>
-              </Card>
+            <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
+              {[
+                { label: 'Total Inward', value: summary?.totalInward || 0, color: 'emerald', icon: TrendingUp },
+                { label: 'Total Outward', value: summary?.totalOutward || 0, color: 'red', icon: TrendingDown },
+                { label: 'Closing Stock', value: summary?.totalClosing || 0, color: 'amber', icon: Archive },
+                { label: 'Net Movement', value: summary?.netMovement || 0, color: 'purple', icon: ArrowUpDown },
+              ].map(s => (
+                <Card key={s.label} className={`border-l-4 border-l-${s.color}-500`}>
+                  <CardContent className="p-4">
+                    <div className="text-xs text-muted-foreground">{s.label}</div>
+                    <div className={`text-2xl font-bold text-${s.color}-600`}>{s.value}</div>
+                  </CardContent>
+                </Card>
+              ))}
             </div>
-
-            {/* Quick Charts */}
             <div className="grid gap-4 md:grid-cols-2">
               <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Daily Inward vs Outward Trend</CardTitle>
-                </CardHeader>
+                <CardHeader className="pb-2"><CardTitle className="text-sm">Daily Inward vs Outward</CardTitle></CardHeader>
                 <CardContent>
-                  <ResponsiveContainer width="100%" height={280}>
+                  <ResponsiveContainer width="100%" height={260}>
                     <BarChart data={dailyTrend}>
                       <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-                      <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} />
-                      <Tooltip />
-                      <Legend />
+                      <XAxis dataKey="date" tick={{ fontSize: 10 }} />
+                      <YAxis tick={{ fontSize: 10 }} />
+                      <Tooltip /><Legend />
                       <Bar dataKey="inward" fill="#10b981" name="Inward" radius={[4, 4, 0, 0]} />
                       <Bar dataKey="outward" fill="#ef4444" name="Outward" radius={[4, 4, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </CardContent>
               </Card>
-
               <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Closing Stock by Category</CardTitle>
-                </CardHeader>
+                <CardHeader className="pb-2"><CardTitle className="text-sm">Closing by Category</CardTitle></CardHeader>
                 <CardContent>
-                  <ResponsiveContainer width="100%" height={280}>
+                  <ResponsiveContainer width="100%" height={260}>
                     <PieChart>
-                      <Pie
-                        data={closingByCategory}
-                        dataKey="qty"
-                        nameKey="category"
-                        cx="50%"
-                        cy="50%"
-                        outerRadius={90}
-                        label={({ category, qty }) => `${category}: ${qty}`}
-                      >
-                        {closingByCategory.map((_, idx) => (
-                          <Cell key={idx} fill={CHART_COLORS[idx % CHART_COLORS.length]} />
-                        ))}
+                      <Pie data={closingByCategory} dataKey="qty" nameKey="category" cx="50%" cy="50%" outerRadius={85} label={({ category, qty }) => `${category}: ${qty}`}>
+                        {closingByCategory.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
                       </Pie>
                       <Tooltip />
                     </PieChart>
@@ -598,52 +516,35 @@ export default function InventoryApp() {
                 </CardContent>
               </Card>
             </div>
-
-            {/* Recent Entries */}
             <div className="grid gap-4 md:grid-cols-2">
               <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Recent Inward Entries</CardTitle>
-                </CardHeader>
+                <CardHeader className="pb-2"><CardTitle className="text-sm">Recent Inwards</CardTitle></CardHeader>
                 <CardContent>
-                  <ScrollArea className="h-[300px]">
-                    <div className="space-y-2">
-                      {filterEntries(inwardEntries).slice(0, 10).map(entry => (
-                        <div key={entry.id} className="flex items-center justify-between p-2 rounded-lg bg-muted/50 hover:bg-muted">
-                          <div>
-                            <div className="font-medium text-sm">{entry.item.name}</div>
-                            <div className="text-xs text-muted-foreground">{entry.type} · {formatDate(entry.date)}</div>
-                          </div>
-                          <Badge variant="secondary" className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400">
-                            +{entry.qty} {entry.unit}
-                          </Badge>
+                  <ScrollArea className="h-[260px]">
+                    <div className="space-y-1.5">
+                      {filterEntries(inwardEntries).slice(0, 10).map(e => (
+                        <div key={e.id} className="flex items-center justify-between p-2 rounded bg-muted/50">
+                          <div><div className="font-medium text-sm">{e.item.name}</div><div className="text-xs text-muted-foreground">{e.type} · {formatDate(e.date)}</div></div>
+                          <Badge variant="secondary" className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400 text-xs">+{e.qty} {e.unit}</Badge>
                         </div>
                       ))}
-                      {inwardEntries.length === 0 && <div className="text-sm text-muted-foreground text-center py-4">No entries yet</div>}
+                      {inwardEntries.length === 0 && <div className="text-sm text-muted-foreground text-center py-4">No entries</div>}
                     </div>
                   </ScrollArea>
                 </CardContent>
               </Card>
-
               <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Recent Outward Entries</CardTitle>
-                </CardHeader>
+                <CardHeader className="pb-2"><CardTitle className="text-sm">Recent Outwards</CardTitle></CardHeader>
                 <CardContent>
-                  <ScrollArea className="h-[300px]">
-                    <div className="space-y-2">
-                      {filterEntries(outwardEntries).slice(0, 10).map(entry => (
-                        <div key={entry.id} className="flex items-center justify-between p-2 rounded-lg bg-muted/50 hover:bg-muted">
-                          <div>
-                            <div className="font-medium text-sm">{entry.item.name}</div>
-                            <div className="text-xs text-muted-foreground">{entry.type} · {formatDate(entry.date)}</div>
-                          </div>
-                          <Badge variant="secondary" className="bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400">
-                            -{entry.qty} {entry.unit}
-                          </Badge>
+                  <ScrollArea className="h-[260px]">
+                    <div className="space-y-1.5">
+                      {filterEntries(outwardEntries).slice(0, 10).map(e => (
+                        <div key={e.id} className="flex items-center justify-between p-2 rounded bg-muted/50">
+                          <div><div className="font-medium text-sm">{e.item.name}</div><div className="text-xs text-muted-foreground">{e.type} · {formatDate(e.date)}</div></div>
+                          <Badge variant="secondary" className="bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400 text-xs">-{e.qty} {e.unit}</Badge>
                         </div>
                       ))}
-                      {outwardEntries.length === 0 && <div className="text-sm text-muted-foreground text-center py-4">No entries yet</div>}
+                      {outwardEntries.length === 0 && <div className="text-sm text-muted-foreground text-center py-4">No entries</div>}
                     </div>
                   </ScrollArea>
                 </CardContent>
@@ -651,156 +552,145 @@ export default function InventoryApp() {
             </div>
           </TabsContent>
 
-          {/* ===== INWARDS TAB ===== */}
-          <TabsContent value="inwards" className="space-y-4">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-lg font-semibold">Inward Entries</h2>
-                <Badge variant="outline" className="bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400">
-                  {filterEntries(inwardEntries).length} entries
-                </Badge>
+          {/* ═══ INWARDS ═══ */}
+          <TabsContent value="inwards" className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-semibold">Inwards</h2>
+                <Badge variant="outline" className="text-xs">{filterEntries(inwardEntries).length}</Badge>
               </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <div className="flex items-center gap-1.5">
-                  <Label className="text-xs whitespace-nowrap">From</Label>
-                  <Input type="date" value={inwardDateFilter.start} onChange={e => setInwardDateFilter(p => ({ ...p, start: e.target.value }))} className="h-8 text-xs w-[140px]" />
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Label className="text-xs whitespace-nowrap">To</Label>
-                  <Input type="date" value={inwardDateFilter.end} onChange={e => setInwardDateFilter(p => ({ ...p, end: e.target.value }))} className="h-8 text-xs w-[140px]" />
-                </div>
-                {(inwardDateFilter.start || inwardDateFilter.end) && (
-                  <Button variant="ghost" size="sm" onClick={() => setInwardDateFilter({ start: '', end: '' })} className="h-8 text-xs">
-                    <X className="h-3 w-3 mr-1" />Clear
-                  </Button>
-                )}
-                <Button variant="outline" size="sm" onClick={() => handleExportCSV(inwardEntries, 'inwards')} className="h-8">
-                  <Download className="h-3 w-3 mr-1" />Export
-                </Button>
-                <Dialog open={inwardDialogOpen} onOpenChange={setInwardDialogOpen}>
-                  <DialogTrigger asChild>
-                    <Button size="sm" className="h-8 bg-emerald-600 hover:bg-emerald-700">
-                      <Plus className="h-3 w-3 mr-1" />Add Inward
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Add Inward Entry</DialogTitle>
-                      <DialogDescription>Record incoming inventory with timestamp</DialogDescription>
-                    </DialogHeader>
-                    <div className="grid gap-3 py-2">
-                      <div className="grid gap-1.5">
-                        <Label>Item *</Label>
-                        <Select value={inwardForm.itemId} onValueChange={v => setInwardForm(p => ({ ...p, itemId: v }))}>
-                          <SelectTrigger><SelectValue placeholder="Select item" /></SelectTrigger>
-                          <SelectContent>
-                            {items.map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="grid gap-1.5">
-                        <Label>Type *</Label>
-                        <Select value={inwardForm.type} onValueChange={v => setInwardForm(p => ({ ...p, type: v }))}>
-                          <SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger>
-                          <SelectContent>
-                            {INWARD_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="grid gap-1.5">
-                          <Label>Quantity *</Label>
-                          <Input type="number" min="0" step="0.01" value={inwardForm.qty} onChange={e => setInwardForm(p => ({ ...p, qty: e.target.value }))} placeholder="0" />
-                        </div>
-                        <div className="grid gap-1.5">
-                          <Label>Unit</Label>
-                          <Select value={inwardForm.unit} onValueChange={v => setInwardForm(p => ({ ...p, unit: v }))}>
-                            <SelectTrigger><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              {UNITS.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
-                      <div className="grid gap-1.5">
-                        <Label>Date *</Label>
-                        <Input type="date" value={inwardForm.date} onChange={e => setInwardForm(p => ({ ...p, date: e.target.value }))} />
-                      </div>
-                      <div className="grid gap-1.5">
-                        <Label>Remarks</Label>
-                        <Input value={inwardForm.remarks} onChange={e => setInwardForm(p => ({ ...p, remarks: e.target.value }))} placeholder="Optional remarks" />
-                      </div>
-                    </div>
-                    <DialogFooter>
-                      <Button variant="outline" onClick={() => setInwardDialogOpen(false)}>Cancel</Button>
-                      <Button onClick={handleAddInward} className="bg-emerald-600 hover:bg-emerald-700">Add Entry</Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <Label className="text-xs">From</Label>
+                <Input type="date" value={inwardDateFilter.start} onChange={e => setInwardDateFilter(p => ({ ...p, start: e.target.value }))} className="h-7 text-xs w-[130px]" />
+                <Label className="text-xs">To</Label>
+                <Input type="date" value={inwardDateFilter.end} onChange={e => setInwardDateFilter(p => ({ ...p, end: e.target.value }))} className="h-7 text-xs w-[130px]" />
+                {inwardDateFilter.start && <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setInwardDateFilter({ start: '', end: '' })}><X className="h-3 w-3" /></Button>}
+                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => handleExportCSV(inwardEntries, 'inwards')}><Download className="h-3 w-3 mr-1" />CSV</Button>
               </div>
             </div>
 
+            {/* ── QUICK-FILL ENTRY AREA ── */}
+            <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20">
+              <CardHeader className="py-3 px-4">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm flex items-center gap-2"><Rows3 className="h-4 w-4" /> Quick Fill — Add Multiple Inward Entries</CardTitle>
+                  <div className="flex items-center gap-2">
+                    <Label className="text-xs font-medium">Date:</Label>
+                    <Input type="date" value={inwardEntryDate} onChange={e => setInwardEntryDate(e.target.value)} className="h-7 text-xs w-[140px]" />
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="px-4 pb-3">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-emerald-200 dark:border-emerald-800">
+                        <th className={`${hp} text-left text-xs font-semibold text-emerald-800 dark:text-emerald-300`}>Item *</th>
+                        <th className={`${hp} text-left text-xs font-semibold text-emerald-800 dark:text-emerald-300`}>Type *</th>
+                        <th className={`${hp} text-left text-xs font-semibold text-emerald-800 dark:text-emerald-300 w-20`}>Qty *</th>
+                        <th className={`${hp} text-left text-xs font-semibold text-emerald-800 dark:text-emerald-300 w-20`}>Unit</th>
+                        <th className={`${hp} text-left text-xs font-semibold text-emerald-800 dark:text-emerald-300 bg-yellow-100 dark:bg-yellow-900/40`}>Remarks</th>
+                        <th className={`${hp} w-24`}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {inwardRows.map((row, idx) => (
+                        <tr key={row.id} className="border-b border-emerald-100 dark:border-emerald-900/50">
+                          <td className={cp}>
+                            <Select value={row.itemId} onValueChange={v => updateRow(setInwardRows, row.id, 'itemId', v)}>
+                              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Item" /></SelectTrigger>
+                              <SelectContent>{items.map(i => <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>)}</SelectContent>
+                            </Select>
+                          </td>
+                          <td className={cp}>
+                            <Select value={row.type} onValueChange={v => updateRow(setInwardRows, row.id, 'type', v)}>
+                              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Type" /></SelectTrigger>
+                              <SelectContent>{INWARD_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+                            </Select>
+                          </td>
+                          <td className={cp}>
+                            <Input type="number" min="0" step="0.01" value={row.qty} onChange={e => updateRow(setInwardRows, row.id, 'qty', e.target.value)} className="h-8 text-xs" placeholder="0" />
+                          </td>
+                          <td className={cp}>
+                            <Select value={row.unit} onValueChange={v => updateRow(setInwardRows, row.id, 'unit', v)}>
+                              <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                              <SelectContent>{UNITS.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent>
+                            </Select>
+                          </td>
+                          <td className={`${cp} bg-yellow-50 dark:bg-yellow-900/20`}>
+                            <Input value={row.remarks} onChange={e => updateRow(setInwardRows, row.id, 'remarks', e.target.value)} className="h-8 text-xs bg-transparent" placeholder="—" />
+                          </td>
+                          <td className={cp}>
+                            <div className="flex gap-1">
+                              <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => removeRow(setInwardRows, row.id)}><X className="h-3 w-3" /></Button>
+                              {idx === inwardRows.length - 1 && (
+                                <>
+                                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => addRow(setInwardRows)} title="Add blank row"><Plus className="h-3 w-3" /></Button>
+                                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => duplicateLastRow(setInwardRows)} title="Duplicate last row"><Copy className="h-3 w-3" /></Button>
+                                </>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="flex items-center justify-between mt-3">
+                  <span className="text-xs text-muted-foreground">{inwardRows.filter(r => r.itemId && r.type && r.qty).length} row(s) ready</span>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setInwardRows([newQuickRow()])}>Clear All</Button>
+                    <Button size="sm" className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700" onClick={submitInwardRows}>
+                      <Check className="h-3 w-3 mr-1" /> Submit All ({inwardRows.filter(r => r.itemId && r.type && r.qty).length})
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Existing entries */}
             <Card>
               <CardContent className="p-0">
-                <ScrollArea className="max-h-[600px]">
+                <ScrollArea className="max-h-[500px]">
                   <Table>
                     <TableHeader>
                       <TableRow className="bg-emerald-600 hover:bg-emerald-600">
-                        <TableHead className={`text-white font-semibold ${headerPad}`}>Item Name</TableHead>
-                        <TableHead className={`text-white font-semibold ${headerPad}`}>Type</TableHead>
-                        <TableHead className={`text-white font-semibold ${headerPad}`}>Qty</TableHead>
-                        <TableHead className={`text-white font-semibold ${headerPad}`}>Unit</TableHead>
-                        <TableHead className={`text-white font-semibold ${headerPad} bg-yellow-400 text-black`}>Remarks</TableHead>
-                        <TableHead className={`text-white font-semibold ${headerPad}`}>Date</TableHead>
-                        <TableHead className={`text-white font-semibold ${headerPad}`}>Timestamp</TableHead>
-                        <TableHead className={`text-white font-semibold ${headerPad}`}>Actions</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp}`}>Item</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp}`}>Type</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp}`}>Qty</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp}`}>Unit</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp} bg-yellow-400 text-black`}>Remarks</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp}`}>Date</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp}`}>Timestamp</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp}`}></TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filterEntries(inwardEntries).map(entry => (
-                        <TableRow key={entry.id} className="hover:bg-muted/50">
-                          <TableCell className={`font-medium ${cellPad}`}>{entry.item.name}</TableCell>
-                          <TableCell className={cellPad}>
-                            <Badge variant="outline" className="text-xs">{entry.type}</Badge>
-                          </TableCell>
-                          <TableCell className={cellPad}>{entry.qty}</TableCell>
-                          <TableCell className={cellPad}>{entry.unit}</TableCell>
-                          <TableCell className={`${cellPad} bg-yellow-50 dark:bg-yellow-900/20`}>
-                            {editingCell === `inward-remarks-${entry.id}` ? (
+                      {filterEntries(inwardEntries).map(e => (
+                        <TableRow key={e.id} className="hover:bg-muted/50">
+                          <TableCell className={`font-medium ${cp}`}>{e.item.name}</TableCell>
+                          <TableCell className={cp}><Badge variant="outline" className="text-xs">{e.type}</Badge></TableCell>
+                          <TableCell className={cp}>{e.qty}</TableCell>
+                          <TableCell className={cp}>{e.unit}</TableCell>
+                          <TableCell className={`${cp} bg-yellow-50 dark:bg-yellow-900/20`}>
+                            {editingCell === `ir-${e.id}` ? (
                               <div className="flex items-center gap-1">
-                                <Input
-                                  value={editValue}
-                                  onChange={e => setEditValue(e.target.value)}
-                                  className="h-7 text-xs"
-                                  autoFocus
-                                  onKeyDown={e => {
-                                    if (e.key === 'Enter') handleRemarksEdit('inwards', entry.id, editValue)
-                                    if (e.key === 'Escape') setEditingCell(null)
-                                  }}
-                                />
-                                <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => handleRemarksEdit('inwards', entry.id, editValue)}>
-                                  <Save className="h-3 w-3" />
-                                </Button>
+                                <Input value={editValue} onChange={ev => setEditValue(ev.target.value)} className="h-7 text-xs" autoFocus
+                                  onKeyDown={ev => { if (ev.key === 'Enter') handleCellEdit('inwards', e.id, 'remarks', editValue); if (ev.key === 'Escape') setEditingCell(null) }} />
+                                <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => handleCellEdit('inwards', e.id, 'remarks', editValue)}><Save className="h-3 w-3" /></Button>
                               </div>
                             ) : (
-                              <div className="flex items-center gap-1 cursor-pointer min-h-[24px]" onClick={() => { setEditingCell(`inward-remarks-${entry.id}`); setEditValue(entry.remarks || '') }}>
-                                <span className="text-xs">{entry.remarks || <span className="text-muted-foreground italic">Click to edit</span>}</span>
-                                <Edit3 className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100" />
-                              </div>
+                              <span className="cursor-pointer hover:bg-yellow-200 dark:hover:bg-yellow-800 px-1 rounded text-xs" onClick={() => { setEditingCell(`ir-${e.id}`); setEditValue(e.remarks || '') }}>{e.remarks || <span className="italic text-muted-foreground">edit</span>}</span>
                             )}
                           </TableCell>
-                          <TableCell className={cellPad}>{formatDate(entry.date)}</TableCell>
-                          <TableCell className={`text-xs text-muted-foreground ${cellPad}`}>{formatTimestamp(entry.createdAt)}</TableCell>
-                          <TableCell className={cellPad}>
-                            <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => { setDeleteTarget({ type: 'inwards', id: entry.id }); setDeleteDialogOpen(true) }}>
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
+                          <TableCell className={cp}>{formatDate(e.date)}</TableCell>
+                          <TableCell className={`text-xs text-muted-foreground ${cp}`}>{formatTimestamp(e.createdAt)}</TableCell>
+                          <TableCell className={cp}>
+                            <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => { setDeleteTarget({ type: 'inwards', id: e.id }); setDeleteDialogOpen(true) }}><Trash2 className="h-3.5 w-3.5" /></Button>
                           </TableCell>
                         </TableRow>
                       ))}
-                      {inwardEntries.length === 0 && (
-                        <TableRow><TableCell colSpan={8} className="text-center py-8 text-muted-foreground">No inward entries yet. Add your first entry!</TableCell></TableRow>
-                      )}
+                      {inwardEntries.length === 0 && <TableRow><TableCell colSpan={8} className="text-center py-6 text-muted-foreground">No entries</TableCell></TableRow>}
                     </TableBody>
                   </Table>
                 </ScrollArea>
@@ -808,156 +698,141 @@ export default function InventoryApp() {
             </Card>
           </TabsContent>
 
-          {/* ===== OUTWARDS TAB ===== */}
-          <TabsContent value="outwards" className="space-y-4">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-lg font-semibold">Outward Entries</h2>
-                <Badge variant="outline" className="bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400">
-                  {filterEntries(outwardEntries).length} entries
-                </Badge>
-              </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <div className="flex items-center gap-1.5">
-                  <Label className="text-xs whitespace-nowrap">From</Label>
-                  <Input type="date" value={outwardDateFilter.start} onChange={e => setOutwardDateFilter(p => ({ ...p, start: e.target.value }))} className="h-8 text-xs w-[140px]" />
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Label className="text-xs whitespace-nowrap">To</Label>
-                  <Input type="date" value={outwardDateFilter.end} onChange={e => setOutwardDateFilter(p => ({ ...p, end: e.target.value }))} className="h-8 text-xs w-[140px]" />
-                </div>
-                {(outwardDateFilter.start || outwardDateFilter.end) && (
-                  <Button variant="ghost" size="sm" onClick={() => setOutwardDateFilter({ start: '', end: '' })} className="h-8 text-xs">
-                    <X className="h-3 w-3 mr-1" />Clear
-                  </Button>
-                )}
-                <Button variant="outline" size="sm" onClick={() => handleExportCSV(outwardEntries, 'outwards')} className="h-8">
-                  <Download className="h-3 w-3 mr-1" />Export
-                </Button>
-                <Dialog open={outwardDialogOpen} onOpenChange={setOutwardDialogOpen}>
-                  <DialogTrigger asChild>
-                    <Button size="sm" className="h-8 bg-red-600 hover:bg-red-700">
-                      <Plus className="h-3 w-3 mr-1" />Add Outward
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Add Outward Entry</DialogTitle>
-                      <DialogDescription>Record outgoing inventory with timestamp</DialogDescription>
-                    </DialogHeader>
-                    <div className="grid gap-3 py-2">
-                      <div className="grid gap-1.5">
-                        <Label>Item *</Label>
-                        <Select value={outwardForm.itemId} onValueChange={v => setOutwardForm(p => ({ ...p, itemId: v }))}>
-                          <SelectTrigger><SelectValue placeholder="Select item" /></SelectTrigger>
-                          <SelectContent>
-                            {items.map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="grid gap-1.5">
-                        <Label>Type *</Label>
-                        <Select value={outwardForm.type} onValueChange={v => setOutwardForm(p => ({ ...p, type: v }))}>
-                          <SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger>
-                          <SelectContent>
-                            {OUTWARD_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="grid gap-1.5">
-                          <Label>Quantity *</Label>
-                          <Input type="number" min="0" step="0.01" value={outwardForm.qty} onChange={e => setOutwardForm(p => ({ ...p, qty: e.target.value }))} placeholder="0" />
-                        </div>
-                        <div className="grid gap-1.5">
-                          <Label>Unit</Label>
-                          <Select value={outwardForm.unit} onValueChange={v => setOutwardForm(p => ({ ...p, unit: v }))}>
-                            <SelectTrigger><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              {UNITS.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
-                      <div className="grid gap-1.5">
-                        <Label>Date *</Label>
-                        <Input type="date" value={outwardForm.date} onChange={e => setOutwardForm(p => ({ ...p, date: e.target.value }))} />
-                      </div>
-                      <div className="grid gap-1.5">
-                        <Label>Remarks</Label>
-                        <Input value={outwardForm.remarks} onChange={e => setOutwardForm(p => ({ ...p, remarks: e.target.value }))} placeholder="Optional remarks" />
-                      </div>
-                    </div>
-                    <DialogFooter>
-                      <Button variant="outline" onClick={() => setOutwardDialogOpen(false)}>Cancel</Button>
-                      <Button onClick={handleAddOutward} className="bg-red-600 hover:bg-red-700">Add Entry</Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
+          {/* ═══ OUTWARDS ═══ */}
+          <TabsContent value="outwards" className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2"><h2 className="text-base font-semibold">Outwards</h2><Badge variant="outline" className="text-xs">{filterEntries(outwardEntries).length}</Badge></div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <Label className="text-xs">From</Label>
+                <Input type="date" value={outwardDateFilter.start} onChange={e => setOutwardDateFilter(p => ({ ...p, start: e.target.value }))} className="h-7 text-xs w-[130px]" />
+                <Label className="text-xs">To</Label>
+                <Input type="date" value={outwardDateFilter.end} onChange={e => setOutwardDateFilter(p => ({ ...p, end: e.target.value }))} className="h-7 text-xs w-[130px]" />
+                {outwardDateFilter.start && <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setOutwardDateFilter({ start: '', end: '' })}><X className="h-3 w-3" /></Button>}
+                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => handleExportCSV(outwardEntries, 'outwards')}><Download className="h-3 w-3 mr-1" />CSV</Button>
               </div>
             </div>
 
+            {/* ── QUICK-FILL ENTRY AREA ── */}
+            <Card className="border-red-200 dark:border-red-800 bg-red-50/50 dark:bg-red-950/20">
+              <CardHeader className="py-3 px-4">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm flex items-center gap-2"><Rows3 className="h-4 w-4" /> Quick Fill — Add Multiple Outward Entries</CardTitle>
+                  <div className="flex items-center gap-2">
+                    <Label className="text-xs font-medium">Date:</Label>
+                    <Input type="date" value={outwardEntryDate} onChange={e => setOutwardEntryDate(e.target.value)} className="h-7 text-xs w-[140px]" />
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="px-4 pb-3">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-red-200 dark:border-red-800">
+                        <th className={`${hp} text-left text-xs font-semibold text-red-800 dark:text-red-300`}>Item *</th>
+                        <th className={`${hp} text-left text-xs font-semibold text-red-800 dark:text-red-300`}>Type *</th>
+                        <th className={`${hp} text-left text-xs font-semibold text-red-800 dark:text-red-300 w-20`}>Qty *</th>
+                        <th className={`${hp} text-left text-xs font-semibold text-red-800 dark:text-red-300 w-20`}>Unit</th>
+                        <th className={`${hp} text-left text-xs font-semibold text-red-800 dark:text-red-300 bg-yellow-100 dark:bg-yellow-900/40`}>Remarks</th>
+                        <th className={`${hp} w-24`}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {outwardRows.map((row, idx) => (
+                        <tr key={row.id} className="border-b border-red-100 dark:border-red-900/50">
+                          <td className={cp}>
+                            <Select value={row.itemId} onValueChange={v => updateRow(setOutwardRows, row.id, 'itemId', v)}>
+                              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Item" /></SelectTrigger>
+                              <SelectContent>{items.map(i => <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>)}</SelectContent>
+                            </Select>
+                          </td>
+                          <td className={cp}>
+                            <Select value={row.type} onValueChange={v => updateRow(setOutwardRows, row.id, 'type', v)}>
+                              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Type" /></SelectTrigger>
+                              <SelectContent>{OUTWARD_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+                            </Select>
+                          </td>
+                          <td className={cp}>
+                            <Input type="number" min="0" step="0.01" value={row.qty} onChange={e => updateRow(setOutwardRows, row.id, 'qty', e.target.value)} className="h-8 text-xs" placeholder="0" />
+                          </td>
+                          <td className={cp}>
+                            <Select value={row.unit} onValueChange={v => updateRow(setOutwardRows, row.id, 'unit', v)}>
+                              <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                              <SelectContent>{UNITS.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent>
+                            </Select>
+                          </td>
+                          <td className={`${cp} bg-yellow-50 dark:bg-yellow-900/20`}>
+                            <Input value={row.remarks} onChange={e => updateRow(setOutwardRows, row.id, 'remarks', e.target.value)} className="h-8 text-xs bg-transparent" placeholder="—" />
+                          </td>
+                          <td className={cp}>
+                            <div className="flex gap-1">
+                              <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => removeRow(setOutwardRows, row.id)}><X className="h-3 w-3" /></Button>
+                              {idx === outwardRows.length - 1 && (
+                                <>
+                                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => addRow(setOutwardRows)} title="Add row"><Plus className="h-3 w-3" /></Button>
+                                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => duplicateLastRow(setOutwardRows)} title="Duplicate"><Copy className="h-3 w-3" /></Button>
+                                </>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="flex items-center justify-between mt-3">
+                  <span className="text-xs text-muted-foreground">{outwardRows.filter(r => r.itemId && r.type && r.qty).length} row(s) ready</span>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setOutwardRows([newQuickRow()])}>Clear All</Button>
+                    <Button size="sm" className="h-8 text-xs bg-red-600 hover:bg-red-700" onClick={submitOutwardRows}>
+                      <Check className="h-3 w-3 mr-1" /> Submit All ({outwardRows.filter(r => r.itemId && r.type && r.qty).length})
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
             <Card>
               <CardContent className="p-0">
-                <ScrollArea className="max-h-[600px]">
+                <ScrollArea className="max-h-[500px]">
                   <Table>
                     <TableHeader>
                       <TableRow className="bg-red-600 hover:bg-red-600">
-                        <TableHead className={`text-white font-semibold ${headerPad}`}>Item Name</TableHead>
-                        <TableHead className={`text-white font-semibold ${headerPad}`}>Type</TableHead>
-                        <TableHead className={`text-white font-semibold ${headerPad}`}>Qty</TableHead>
-                        <TableHead className={`text-white font-semibold ${headerPad}`}>Unit</TableHead>
-                        <TableHead className={`text-white font-semibold ${headerPad} bg-yellow-400 text-black`}>Remarks</TableHead>
-                        <TableHead className={`text-white font-semibold ${headerPad}`}>Date</TableHead>
-                        <TableHead className={`text-white font-semibold ${headerPad}`}>Timestamp</TableHead>
-                        <TableHead className={`text-white font-semibold ${headerPad}`}>Actions</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp}`}>Item</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp}`}>Type</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp}`}>Qty</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp}`}>Unit</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp} bg-yellow-400 text-black`}>Remarks</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp}`}>Date</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp}`}>Timestamp</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp}`}></TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filterEntries(outwardEntries).map(entry => (
-                        <TableRow key={entry.id} className="hover:bg-muted/50">
-                          <TableCell className={`font-medium ${cellPad}`}>{entry.item.name}</TableCell>
-                          <TableCell className={cellPad}>
-                            <Badge variant="outline" className="text-xs">{entry.type}</Badge>
-                          </TableCell>
-                          <TableCell className={cellPad}>{entry.qty}</TableCell>
-                          <TableCell className={cellPad}>{entry.unit}</TableCell>
-                          <TableCell className={`${cellPad} bg-yellow-50 dark:bg-yellow-900/20`}>
-                            {editingCell === `outward-remarks-${entry.id}` ? (
+                      {filterEntries(outwardEntries).map(e => (
+                        <TableRow key={e.id} className="hover:bg-muted/50">
+                          <TableCell className={`font-medium ${cp}`}>{e.item.name}</TableCell>
+                          <TableCell className={cp}><Badge variant="outline" className="text-xs">{e.type}</Badge></TableCell>
+                          <TableCell className={cp}>{e.qty}</TableCell>
+                          <TableCell className={cp}>{e.unit}</TableCell>
+                          <TableCell className={`${cp} bg-yellow-50 dark:bg-yellow-900/20`}>
+                            {editingCell === `or-${e.id}` ? (
                               <div className="flex items-center gap-1">
-                                <Input
-                                  value={editValue}
-                                  onChange={e => setEditValue(e.target.value)}
-                                  className="h-7 text-xs"
-                                  autoFocus
-                                  onKeyDown={e => {
-                                    if (e.key === 'Enter') handleRemarksEdit('outwards', entry.id, editValue)
-                                    if (e.key === 'Escape') setEditingCell(null)
-                                  }}
-                                />
-                                <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => handleRemarksEdit('outwards', entry.id, editValue)}>
-                                  <Save className="h-3 w-3" />
-                                </Button>
+                                <Input value={editValue} onChange={ev => setEditValue(ev.target.value)} className="h-7 text-xs" autoFocus
+                                  onKeyDown={ev => { if (ev.key === 'Enter') handleCellEdit('outwards', e.id, 'remarks', editValue); if (ev.key === 'Escape') setEditingCell(null) }} />
+                                <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => handleCellEdit('outwards', e.id, 'remarks', editValue)}><Save className="h-3 w-3" /></Button>
                               </div>
                             ) : (
-                              <div className="flex items-center gap-1 cursor-pointer min-h-[24px]" onClick={() => { setEditingCell(`outward-remarks-${entry.id}`); setEditValue(entry.remarks || '') }}>
-                                <span className="text-xs">{entry.remarks || <span className="text-muted-foreground italic">Click to edit</span>}</span>
-                                <Edit3 className="h-3 w-3 text-muted-foreground" />
-                              </div>
+                              <span className="cursor-pointer hover:bg-yellow-200 dark:hover:bg-yellow-800 px-1 rounded text-xs" onClick={() => { setEditingCell(`or-${e.id}`); setEditValue(e.remarks || '') }}>{e.remarks || <span className="italic text-muted-foreground">edit</span>}</span>
                             )}
                           </TableCell>
-                          <TableCell className={cellPad}>{formatDate(entry.date)}</TableCell>
-                          <TableCell className={`text-xs text-muted-foreground ${cellPad}`}>{formatTimestamp(entry.createdAt)}</TableCell>
-                          <TableCell className={cellPad}>
-                            <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => { setDeleteTarget({ type: 'outwards', id: entry.id }); setDeleteDialogOpen(true) }}>
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
+                          <TableCell className={cp}>{formatDate(e.date)}</TableCell>
+                          <TableCell className={`text-xs text-muted-foreground ${cp}`}>{formatTimestamp(e.createdAt)}</TableCell>
+                          <TableCell className={cp}>
+                            <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => { setDeleteTarget({ type: 'outwards', id: e.id }); setDeleteDialogOpen(true) }}><Trash2 className="h-3.5 w-3.5" /></Button>
                           </TableCell>
                         </TableRow>
                       ))}
-                      {outwardEntries.length === 0 && (
-                        <TableRow><TableCell colSpan={8} className="text-center py-8 text-muted-foreground">No outward entries yet. Add your first entry!</TableCell></TableRow>
-                      )}
+                      {outwardEntries.length === 0 && <TableRow><TableCell colSpan={8} className="text-center py-6 text-muted-foreground">No entries</TableCell></TableRow>}
                     </TableBody>
                   </Table>
                 </ScrollArea>
@@ -965,172 +840,158 @@ export default function InventoryApp() {
             </Card>
           </TabsContent>
 
-          {/* ===== CLOSING INVENTORY TAB ===== */}
-          <TabsContent value="closing" className="space-y-4">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <h2 className="text-lg font-semibold">Closing Inventory</h2>
-                <Badge variant="outline" className="bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
-                  {closingEntries.length} items
-                </Badge>
+          {/* ═══ CLOSING INVENTORY ═══ */}
+          <TabsContent value="closing" className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2"><h2 className="text-base font-semibold">Closing Inventory</h2><Badge variant="outline" className="text-xs">{closingEntries.length}</Badge></div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <Label className="text-xs">Date</Label>
+                <Input type="date" value={closingDate} onChange={e => setClosingDate(e.target.value)} className="h-7 text-xs w-[140px]" />
+                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => handleExportCSV(closingEntries, 'closing')}><Download className="h-3 w-3 mr-1" />CSV</Button>
               </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <div className="flex items-center gap-1.5">
-                  <Label className="text-xs whitespace-nowrap">Date</Label>
-                  <Input type="date" value={closingDate} onChange={e => setClosingDate(e.target.value)} className="h-8 text-xs w-[160px]" />
+            </div>
+
+            <div className="flex items-center gap-2 p-2.5 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+              <div className="h-4 w-4 bg-yellow-400 rounded shrink-0" />
+              <span className="text-xs text-yellow-800 dark:text-yellow-300"><strong>Yellow cells</strong> are editable — click Qty or Box to modify.</span>
+            </div>
+
+            {/* ── QUICK-FILL FOR CLOSING ── */}
+            <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20">
+              <CardHeader className="py-3 px-4">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm flex items-center gap-2"><Rows3 className="h-4 w-4" /> Quick Fill — Add Closing Entries</CardTitle>
+                  <div className="flex items-center gap-2">
+                    <Label className="text-xs font-medium">Date:</Label>
+                    <Input type="date" value={closingEntryDate} onChange={e => setClosingEntryDate(e.target.value)} className="h-7 text-xs w-[140px]" />
+                  </div>
                 </div>
-                <Button variant="outline" size="sm" onClick={() => handleExportCSV(closingEntries, 'closing-inventory')} className="h-8">
-                  <Download className="h-3 w-3 mr-1" />Export
-                </Button>
-                <Dialog open={closingDialogOpen} onOpenChange={setClosingDialogOpen}>
-                  <DialogTrigger asChild>
-                    <Button size="sm" className="h-8 bg-amber-600 hover:bg-amber-700">
-                      <Plus className="h-3 w-3 mr-1" />Add Entry
+              </CardHeader>
+              <CardContent className="px-4 pb-3">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-amber-200 dark:border-amber-800">
+                        <th className={`${hp} text-left text-xs font-semibold text-amber-800 dark:text-amber-300`}>Item *</th>
+                        <th className={`${hp} text-left text-xs font-semibold text-amber-800 dark:text-amber-300`}>Sub-Type *</th>
+                        <th className={`${hp} text-left text-xs font-semibold text-amber-800 dark:text-amber-300 bg-yellow-100 dark:bg-yellow-900/40 w-20`}>Qty *</th>
+                        <th className={`${hp} text-left text-xs font-semibold text-amber-800 dark:text-amber-300 w-20`}>Unit</th>
+                        <th className={`${hp} text-left text-xs font-semibold text-amber-800 dark:text-amber-300 bg-yellow-100 dark:bg-yellow-900/40 w-20`}>Box</th>
+                        <th className={`${hp} w-24`}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {closingRows.map((row, idx) => {
+                        const selectedItem = items.find(i => i.id === row.itemId)
+                        const subTypes = selectedItem ? JSON.parse(selectedItem.subTypes || '[]') as string[] : []
+                        return (
+                          <tr key={row.id} className="border-b border-amber-100 dark:border-amber-900/50">
+                            <td className={cp}>
+                              <Select value={row.itemId} onValueChange={v => { updateRow(setClosingRows, row.id, 'itemId', v); updateRow(setClosingRows, row.id, 'type', ''); }}>
+                                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Item" /></SelectTrigger>
+                                <SelectContent>{items.map(i => <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>)}</SelectContent>
+                              </Select>
+                            </td>
+                            <td className={cp}>
+                              <Select value={row.type} onValueChange={v => updateRow(setClosingRows, row.id, 'type', v)}>
+                                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Sub-type" /></SelectTrigger>
+                                <SelectContent>{subTypes.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+                              </Select>
+                            </td>
+                            <td className={`${cp} bg-yellow-50 dark:bg-yellow-900/20`}>
+                              <Input type="number" min="0" step="0.01" value={row.qty} onChange={e => updateRow(setClosingRows, row.id, 'qty', e.target.value)} className="h-8 text-xs bg-transparent" placeholder="0" />
+                            </td>
+                            <td className={cp}>
+                              <Select value={row.unit} onValueChange={v => updateRow(setClosingRows, row.id, 'unit', v)}>
+                                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                                <SelectContent>{UNITS.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent>
+                              </Select>
+                            </td>
+                            <td className={`${cp} bg-yellow-50 dark:bg-yellow-900/20`}>
+                              <Input value={row.box} onChange={e => updateRow(setClosingRows, row.id, 'box', e.target.value)} className="h-8 text-xs bg-transparent" placeholder="—" />
+                            </td>
+                            <td className={cp}>
+                              <div className="flex gap-1">
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => removeRow(setClosingRows, row.id)}><X className="h-3 w-3" /></Button>
+                                {idx === closingRows.length - 1 && (
+                                  <>
+                                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => addRow(setClosingRows)}><Plus className="h-3 w-3" /></Button>
+                                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => duplicateLastRow(setClosingRows)}><Copy className="h-3 w-3" /></Button>
+                                  </>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="flex items-center justify-between mt-3">
+                  <span className="text-xs text-muted-foreground">{closingRows.filter(r => r.itemId && r.type && r.qty).length} row(s) ready</span>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setClosingRows([newQuickRow()])}>Clear All</Button>
+                    <Button size="sm" className="h-8 text-xs bg-amber-600 hover:bg-amber-700" onClick={submitClosingRows}>
+                      <Check className="h-3 w-3 mr-1" /> Submit All ({closingRows.filter(r => r.itemId && r.type && r.qty).length})
                     </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Add Closing Inventory Entry</DialogTitle>
-                      <DialogDescription>Record closing stock with editable box count</DialogDescription>
-                    </DialogHeader>
-                    <div className="grid gap-3 py-2">
-                      <div className="grid gap-1.5">
-                        <Label>Item *</Label>
-                        <Select value={closingForm.itemId} onValueChange={v => {
-                          const item = items.find(i => i.id === v)
-                          setClosingForm(p => ({ ...p, itemId: v, unit: item?.unitType || 'Box' }))
-                        }}>
-                          <SelectTrigger><SelectValue placeholder="Select item" /></SelectTrigger>
-                          <SelectContent>
-                            {items.map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="grid gap-1.5">
-                        <Label>Sub-Type *</Label>
-                        <Select value={closingForm.type} onValueChange={v => setClosingForm(p => ({ ...p, type: v }))}>
-                          <SelectTrigger><SelectValue placeholder="Select sub-type" /></SelectTrigger>
-                          <SelectContent>
-                            {closingForm.itemId && (() => {
-                              const item = items.find(i => i.id === closingForm.itemId)
-                              if (!item) return null
-                              return JSON.parse(item.subTypes || '[]').map((t: string) => <SelectItem key={t} value={t}>{t}</SelectItem>)
-                            })()}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="grid gap-1.5">
-                          <Label>Quantity *</Label>
-                          <Input type="number" min="0" step="0.01" value={closingForm.qty} onChange={e => setClosingForm(p => ({ ...p, qty: e.target.value }))} placeholder="0" />
-                        </div>
-                        <div className="grid gap-1.5">
-                          <Label>Unit</Label>
-                          <Select value={closingForm.unit} onValueChange={v => setClosingForm(p => ({ ...p, unit: v }))}>
-                            <SelectTrigger><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              {UNITS.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
-                      <div className="grid gap-1.5">
-                        <Label className="flex items-center gap-1">Box <span className="bg-yellow-200 dark:bg-yellow-800 px-1.5 py-0.5 rounded text-xs">Editable</span></Label>
-                        <Input value={closingForm.box} onChange={e => setClosingForm(p => ({ ...p, box: e.target.value }))} placeholder="Box count (editable)" className="border-yellow-400 bg-yellow-50 dark:bg-yellow-900/20" />
-                      </div>
-                      <div className="grid gap-1.5">
-                        <Label>Date *</Label>
-                        <Input type="date" value={closingForm.date} onChange={e => setClosingForm(p => ({ ...p, date: e.target.value }))} />
-                      </div>
-                    </div>
-                    <DialogFooter>
-                      <Button variant="outline" onClick={() => setClosingDialogOpen(false)}>Cancel</Button>
-                      <Button onClick={handleAddClosing} className="bg-amber-600 hover:bg-amber-700">Add Entry</Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-              </div>
-            </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
-            {/* Info Banner */}
-            <div className="flex items-center gap-2 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-              <div className="h-4 w-4 bg-yellow-400 rounded" />
-              <span className="text-sm text-yellow-800 dark:text-yellow-300">
-                <strong>Yellow cells</strong> are editable (Box, Qty) — click to modify. All other cells are read-only/display only.
-              </span>
-            </div>
-
-            {/* Closing Inventory Table - Grouped by Item */}
+            {/* Existing closing entries */}
             <Card>
               <CardContent className="p-0">
-                <ScrollArea className="max-h-[600px]">
+                <ScrollArea className="max-h-[500px]">
                   <Table>
                     <TableHeader>
                       <TableRow className="bg-amber-600 hover:bg-amber-600">
-                        <TableHead className={`text-white font-semibold ${headerPad}`}>Item Name</TableHead>
-                        <TableHead className={`text-white font-semibold ${headerPad}`}>Type</TableHead>
-                        <TableHead className={`text-white font-semibold ${headerPad} bg-yellow-400 text-black`}>Qty</TableHead>
-                        <TableHead className={`text-white font-semibold ${headerPad}`}>Unit</TableHead>
-                        <TableHead className={`text-white font-semibold ${headerPad} bg-yellow-400 text-black`}>Box</TableHead>
-                        <TableHead className={`text-white font-semibold ${headerPad}`}>Actions</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp}`}>Item</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp}`}>Type</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp} bg-yellow-400 text-black`}>Qty</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp}`}>Unit</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp} bg-yellow-400 text-black`}>Box</TableHead>
+                        <TableHead className={`text-white font-semibold ${hp}`}></TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {Object.entries(groupedClosing).map(([itemName, entries]) => (
-                        <React.Fragment key={itemName}>
-                          {entries.map((entry, idx) => (
-                            <TableRow key={entry.id} className={idx === 0 ? 'border-t-2 border-t-amber-300' : ''}>
-                              {idx === 0 ? (
-                                <TableCell className={`font-bold text-amber-800 dark:text-amber-300 ${cellPad}`} rowSpan={entries.length}>
-                                  {itemName}
-                                </TableCell>
-                              ) : null}
-                              <TableCell className={cellPad}>
-                                <span className="text-xs">{entry.type}</span>
-                              </TableCell>
-                              <TableCell className={`${cellPad} bg-yellow-50 dark:bg-yellow-900/20`}>
-                                {editingCell === `closing-qty-${entry.id}` ? (
+                      {Object.entries(groupedClosing).map(([name, entries]) => (
+                        <React.Fragment key={name}>
+                          {entries.map((e, idx) => (
+                            <TableRow key={e.id} className={idx === 0 ? 'border-t-2 border-t-amber-300' : ''}>
+                              {idx === 0 && <TableCell className={`font-bold text-amber-800 dark:text-amber-300 ${cp}`} rowSpan={entries.length}>{name}</TableCell>}
+                              <TableCell className={cp}><span className="text-xs">{e.type}</span></TableCell>
+                              <TableCell className={`${cp} bg-yellow-50 dark:bg-yellow-900/20`}>
+                                {editingCell === `cq-${e.id}` ? (
                                   <div className="flex items-center gap-1">
-                                    <Input type="number" value={editValue} onChange={e => setEditValue(e.target.value)} className="h-7 text-xs w-20" autoFocus
-                                      onKeyDown={e => { if (e.key === 'Enter') handleClosingEdit(entry.id, 'qty', editValue); if (e.key === 'Escape') setEditingCell(null) }} />
-                                    <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => handleClosingEdit(entry.id, 'qty', editValue)}>
-                                      <Save className="h-3 w-3" />
-                                    </Button>
+                                    <Input type="number" value={editValue} onChange={ev => setEditValue(ev.target.value)} className="h-7 text-xs w-16" autoFocus
+                                      onKeyDown={ev => { if (ev.key === 'Enter') handleCellEdit('closing', e.id, 'qty', editValue); if (ev.key === 'Escape') setEditingCell(null) }} />
+                                    <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => handleCellEdit('closing', e.id, 'qty', editValue)}><Save className="h-3 w-3" /></Button>
                                   </div>
                                 ) : (
-                                  <span className="cursor-pointer hover:bg-yellow-200 dark:hover:bg-yellow-800 px-1 rounded" onClick={() => { setEditingCell(`closing-qty-${entry.id}`); setEditValue(String(entry.qty)) }}>
-                                    {entry.qty}
-                                  </span>
+                                  <span className="cursor-pointer hover:bg-yellow-200 dark:hover:bg-yellow-800 px-1 rounded" onClick={() => { setEditingCell(`cq-${e.id}`); setEditValue(String(e.qty)) }}>{e.qty}</span>
                                 )}
                               </TableCell>
-                              <TableCell className={cellPad}>{entry.unit}</TableCell>
-                              <TableCell className={`${cellPad} bg-yellow-50 dark:bg-yellow-900/20`}>
-                                {editingCell === `closing-box-${entry.id}` ? (
+                              <TableCell className={cp}>{e.unit}</TableCell>
+                              <TableCell className={`${cp} bg-yellow-50 dark:bg-yellow-900/20`}>
+                                {editingCell === `cb-${e.id}` ? (
                                   <div className="flex items-center gap-1">
-                                    <Input value={editValue} onChange={e => setEditValue(e.target.value)} className="h-7 text-xs w-20" autoFocus
-                                      onKeyDown={e => { if (e.key === 'Enter') handleClosingEdit(entry.id, 'box', editValue); if (e.key === 'Escape') setEditingCell(null) }} />
-                                    <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => handleClosingEdit(entry.id, 'box', editValue)}>
-                                      <Save className="h-3 w-3" />
-                                    </Button>
+                                    <Input value={editValue} onChange={ev => setEditValue(ev.target.value)} className="h-7 text-xs w-16" autoFocus
+                                      onKeyDown={ev => { if (ev.key === 'Enter') handleCellEdit('closing', e.id, 'box', editValue); if (ev.key === 'Escape') setEditingCell(null) }} />
+                                    <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => handleCellEdit('closing', e.id, 'box', editValue)}><Save className="h-3 w-3" /></Button>
                                   </div>
                                 ) : (
-                                  <span className="cursor-pointer hover:bg-yellow-200 dark:hover:bg-yellow-800 px-1 rounded" onClick={() => { setEditingCell(`closing-box-${entry.id}`); setEditValue(entry.box || '') }}>
-                                    {entry.box || <span className="text-muted-foreground italic text-xs">Click</span>}
-                                  </span>
+                                  <span className="cursor-pointer hover:bg-yellow-200 dark:hover:bg-yellow-800 px-1 rounded" onClick={() => { setEditingCell(`cb-${e.id}`); setEditValue(e.box || '') }}>{e.box || <span className="italic text-muted-foreground text-xs">edit</span>}</span>
                                 )}
                               </TableCell>
-                              <TableCell className={cellPad}>
-                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => { setDeleteTarget({ type: 'closing', id: entry.id }); setDeleteDialogOpen(true) }}>
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </Button>
+                              <TableCell className={cp}>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => { setDeleteTarget({ type: 'closing', id: e.id }); setDeleteDialogOpen(true) }}><Trash2 className="h-3.5 w-3.5" /></Button>
                               </TableCell>
                             </TableRow>
                           ))}
                         </React.Fragment>
                       ))}
-                      {closingEntries.length === 0 && (
-                        <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No closing entries for this date.</TableCell></TableRow>
-                      )}
+                      {closingEntries.length === 0 && <TableRow><TableCell colSpan={6} className="text-center py-6 text-muted-foreground">No entries for this date</TableCell></TableRow>}
                     </TableBody>
                   </Table>
                 </ScrollArea>
@@ -1138,203 +999,112 @@ export default function InventoryApp() {
             </Card>
           </TabsContent>
 
-          {/* ===== ANALYTICS TAB ===== */}
+          {/* ═══ ANALYTICS ═══ */}
           <TabsContent value="analytics" className="space-y-4">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold">Analytics Dashboard</h2>
-              <div className="flex items-center gap-2 flex-wrap">
-                <div className="flex items-center gap-1.5">
-                  <Label className="text-xs whitespace-nowrap">From</Label>
-                  <Input type="date" value={analyticsDateFilter.start} onChange={e => setAnalyticsDateFilter(p => ({ ...p, start: e.target.value }))} className="h-8 text-xs w-[140px]" />
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Label className="text-xs whitespace-nowrap">To</Label>
-                  <Input type="date" value={analyticsDateFilter.end} onChange={e => setAnalyticsDateFilter(p => ({ ...p, end: e.target.value }))} className="h-8 text-xs w-[140px]" />
-                </div>
-                {(analyticsDateFilter.start || analyticsDateFilter.end) && (
-                  <Button variant="ghost" size="sm" onClick={() => setAnalyticsDateFilter({ start: '', end: '' })} className="h-8 text-xs">
-                    <X className="h-3 w-3 mr-1" />Clear
-                  </Button>
-                )}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-base font-semibold">Analytics</h2>
+              <div className="flex items-center gap-1.5">
+                <Label className="text-xs">From</Label>
+                <Input type="date" value={analyticsDateFilter.start} onChange={e => setAnalyticsDateFilter(p => ({ ...p, start: e.target.value }))} className="h-7 text-xs w-[130px]" />
+                <Label className="text-xs">To</Label>
+                <Input type="date" value={analyticsDateFilter.end} onChange={e => setAnalyticsDateFilter(p => ({ ...p, end: e.target.value }))} className="h-7 text-xs w-[130px]" />
+                {analyticsDateFilter.start && <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setAnalyticsDateFilter({ start: '', end: '' })}><X className="h-3 w-3" /></Button>}
               </div>
             </div>
-
-            {/* Summary Cards */}
-            <div className="grid gap-4 grid-cols-2 md:grid-cols-5">
-              <Card className="border-l-4 border-l-emerald-500">
-                <CardContent className="p-4">
-                  <div className="text-xs text-muted-foreground">Total Inward</div>
-                  <div className="text-xl font-bold text-emerald-600">{summary?.totalInward || 0}</div>
-                </CardContent>
-              </Card>
-              <Card className="border-l-4 border-l-red-500">
-                <CardContent className="p-4">
-                  <div className="text-xs text-muted-foreground">Total Outward</div>
-                  <div className="text-xl font-bold text-red-600">{summary?.totalOutward || 0}</div>
-                </CardContent>
-              </Card>
-              <Card className="border-l-4 border-l-amber-500">
-                <CardContent className="p-4">
-                  <div className="text-xs text-muted-foreground">Closing Stock</div>
-                  <div className="text-xl font-bold text-amber-600">{summary?.totalClosing || 0}</div>
-                </CardContent>
-              </Card>
-              <Card className="border-l-4 border-l-purple-500">
-                <CardContent className="p-4">
-                  <div className="text-xs text-muted-foreground">Net Movement</div>
-                  <div className="text-xl font-bold text-purple-600">{summary?.netMovement || 0}</div>
-                </CardContent>
-              </Card>
-              <Card className="border-l-4 border-l-cyan-500">
-                <CardContent className="p-4">
-                  <div className="text-xs text-muted-foreground">Total Items</div>
-                  <div className="text-xl font-bold text-cyan-600">{summary?.totalItems || 0}</div>
-                </CardContent>
-              </Card>
+            <div className="grid gap-3 grid-cols-2 md:grid-cols-5">
+              {[
+                { label: 'Inward', val: summary?.totalInward || 0, c: 'emerald' },
+                { label: 'Outward', val: summary?.totalOutward || 0, c: 'red' },
+                { label: 'Closing', val: summary?.totalClosing || 0, c: 'amber' },
+                { label: 'Net', val: summary?.netMovement || 0, c: 'purple' },
+                { label: 'Items', val: summary?.totalItems || 0, c: 'cyan' },
+              ].map(s => (
+                <Card key={s.label}><CardContent className="p-3"><div className="text-xs text-muted-foreground">{s.label}</div><div className="text-xl font-bold">{s.val}</div></CardContent></Card>
+              ))}
             </div>
-
-            {/* Charts Row 1 */}
             <div className="grid gap-4 md:grid-cols-2">
               <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Daily Inward vs Outward Trend</CardTitle>
-                  <CardDescription>Stock movement over time</CardDescription>
-                </CardHeader>
+                <CardHeader className="pb-2"><CardTitle className="text-sm">Trend</CardTitle></CardHeader>
                 <CardContent>
-                  <ResponsiveContainer width="100%" height={320}>
+                  <ResponsiveContainer width="100%" height={300}>
                     <AreaChart data={dailyTrend}>
                       <defs>
-                        <linearGradient id="inwardGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                          <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                        </linearGradient>
-                        <linearGradient id="outwardGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3} />
-                          <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
-                        </linearGradient>
+                        <linearGradient id="ig" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10b981" stopOpacity={0.3} /><stop offset="95%" stopColor="#10b981" stopOpacity={0} /></linearGradient>
+                        <linearGradient id="og" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#ef4444" stopOpacity={0.3} /><stop offset="95%" stopColor="#ef4444" stopOpacity={0} /></linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-                      <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} />
-                      <Tooltip />
-                      <Legend />
-                      <Area type="monotone" dataKey="inward" stroke="#10b981" fill="url(#inwardGrad)" name="Inward" />
-                      <Area type="monotone" dataKey="outward" stroke="#ef4444" fill="url(#outwardGrad)" name="Outward" />
+                      <XAxis dataKey="date" tick={{ fontSize: 10 }} /><YAxis tick={{ fontSize: 10 }} />
+                      <Tooltip /><Legend />
+                      <Area type="monotone" dataKey="inward" stroke="#10b981" fill="url(#ig)" name="Inward" />
+                      <Area type="monotone" dataKey="outward" stroke="#ef4444" fill="url(#og)" name="Outward" />
                     </AreaChart>
                   </ResponsiveContainer>
                 </CardContent>
               </Card>
-
               <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Closing Stock by Category</CardTitle>
-                  <CardDescription>Distribution of current inventory</CardDescription>
-                </CardHeader>
+                <CardHeader className="pb-2"><CardTitle className="text-sm">By Category</CardTitle></CardHeader>
                 <CardContent>
-                  <ResponsiveContainer width="100%" height={320}>
+                  <ResponsiveContainer width="100%" height={300}>
                     <PieChart>
-                      <Pie
-                        data={closingByCategory}
-                        dataKey="qty"
-                        nameKey="category"
-                        cx="50%"
-                        cy="50%"
-                        outerRadius={100}
-                        innerRadius={50}
-                        label={({ category, percent }) => `${category} (${(percent * 100).toFixed(0)}%)`}
-                      >
-                        {closingByCategory.map((_, idx) => (
-                          <Cell key={idx} fill={CHART_COLORS[idx % CHART_COLORS.length]} />
-                        ))}
+                      <Pie data={closingByCategory} dataKey="qty" nameKey="category" cx="50%" cy="50%" outerRadius={95} innerRadius={45}
+                        label={({ category, percent }) => `${category} ${(percent * 100).toFixed(0)}%`}>
+                        {closingByCategory.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
                       </Pie>
-                      <Tooltip />
-                      <Legend />
+                      <Tooltip /><Legend />
                     </PieChart>
                   </ResponsiveContainer>
                 </CardContent>
               </Card>
             </div>
-
-            {/* Charts Row 2 */}
             <div className="grid gap-4 md:grid-cols-2">
               <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Inward by Type</CardTitle>
-                  <CardDescription>Breakdown of incoming stock sources</CardDescription>
-                </CardHeader>
+                <CardHeader className="pb-2"><CardTitle className="text-sm">Inward by Type</CardTitle></CardHeader>
                 <CardContent>
-                  <ResponsiveContainer width="100%" height={300}>
+                  <ResponsiveContainer width="100%" height={280}>
                     <BarChart data={inwardByType} layout="vertical">
                       <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-                      <XAxis type="number" tick={{ fontSize: 11 }} />
-                      <YAxis dataKey="type" type="category" tick={{ fontSize: 11 }} width={160} />
-                      <Tooltip />
-                      <Bar dataKey="qty" fill="#10b981" name="Quantity" radius={[0, 4, 4, 0]} />
+                      <XAxis type="number" tick={{ fontSize: 10 }} /><YAxis dataKey="type" type="category" tick={{ fontSize: 10 }} width={150} />
+                      <Tooltip /><Bar dataKey="qty" fill="#10b981" name="Qty" radius={[0, 4, 4, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </CardContent>
               </Card>
-
               <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Outward by Type</CardTitle>
-                  <CardDescription>Breakdown of outgoing stock channels</CardDescription>
-                </CardHeader>
+                <CardHeader className="pb-2"><CardTitle className="text-sm">Outward by Type</CardTitle></CardHeader>
                 <CardContent>
-                  <ResponsiveContainer width="100%" height={300}>
+                  <ResponsiveContainer width="100%" height={280}>
                     <BarChart data={outwardByType} layout="vertical">
                       <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-                      <XAxis type="number" tick={{ fontSize: 11 }} />
-                      <YAxis dataKey="type" type="category" tick={{ fontSize: 11 }} width={160} />
-                      <Tooltip />
-                      <Bar dataKey="qty" fill="#ef4444" name="Quantity" radius={[0, 4, 4, 0]} />
+                      <XAxis type="number" tick={{ fontSize: 10 }} /><YAxis dataKey="type" type="category" tick={{ fontSize: 10 }} width={150} />
+                      <Tooltip /><Bar dataKey="qty" fill="#ef4444" name="Qty" radius={[0, 4, 4, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </CardContent>
               </Card>
             </div>
-
-            {/* Charts Row 3 - Item level */}
             <div className="grid gap-4 md:grid-cols-2">
               <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Inward by Item</CardTitle>
-                  <CardDescription>Which items received the most stock</CardDescription>
-                </CardHeader>
+                <CardHeader className="pb-2"><CardTitle className="text-sm">Inward by Item</CardTitle></CardHeader>
                 <CardContent>
-                  <ResponsiveContainer width="100%" height={300}>
+                  <ResponsiveContainer width="100%" height={280}>
                     <BarChart data={inwardByItem}>
                       <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-                      <XAxis dataKey="name" tick={{ fontSize: 10 }} angle={-30} textAnchor="end" height={80} />
-                      <YAxis tick={{ fontSize: 11 }} />
-                      <Tooltip />
-                      <Bar dataKey="qty" name="Inward Qty">
-                        {inwardByItem.map((_, idx) => (
-                          <Cell key={idx} fill={CHART_COLORS[idx % CHART_COLORS.length]} />
-                        ))}
-                      </Bar>
+                      <XAxis dataKey="name" tick={{ fontSize: 9 }} angle={-25} textAnchor="end" height={70} />
+                      <YAxis tick={{ fontSize: 10 }} /><Tooltip />
+                      <Bar dataKey="qty" name="Inward">{inwardByItem.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}</Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </CardContent>
               </Card>
-
               <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Outward by Item</CardTitle>
-                  <CardDescription>Which items dispatched the most</CardDescription>
-                </CardHeader>
+                <CardHeader className="pb-2"><CardTitle className="text-sm">Outward by Item</CardTitle></CardHeader>
                 <CardContent>
-                  <ResponsiveContainer width="100%" height={300}>
+                  <ResponsiveContainer width="100%" height={280}>
                     <BarChart data={outwardByItem}>
                       <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-                      <XAxis dataKey="name" tick={{ fontSize: 10 }} angle={-30} textAnchor="end" height={80} />
-                      <YAxis tick={{ fontSize: 11 }} />
-                      <Tooltip />
-                      <Bar dataKey="qty" name="Outward Qty">
-                        {outwardByItem.map((_, idx) => (
-                          <Cell key={idx} fill={CHART_COLORS[idx % CHART_COLORS.length]} />
-                        ))}
-                      </Bar>
+                      <XAxis dataKey="name" tick={{ fontSize: 9 }} angle={-25} textAnchor="end" height={70} />
+                      <YAxis tick={{ fontSize: 10 }} /><Tooltip />
+                      <Bar dataKey="qty" name="Outward">{outwardByItem.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}</Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </CardContent>
@@ -1344,13 +1114,10 @@ export default function InventoryApp() {
         </Tabs>
       </main>
 
-      {/* Delete Confirmation Dialog */}
+      {/* Delete Dialog */}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Confirm Delete</DialogTitle>
-            <DialogDescription>Are you sure you want to delete this entry? This action cannot be undone.</DialogDescription>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>Delete Entry</DialogTitle><DialogDescription>Are you sure? This cannot be undone.</DialogDescription></DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>Cancel</Button>
             <Button variant="destructive" onClick={handleDelete}>Delete</Button>
@@ -1358,47 +1125,30 @@ export default function InventoryApp() {
         </DialogContent>
       </Dialog>
 
-      {/* Floating Add Item Button */}
+      {/* Add Item FAB */}
+      <Button className="fixed bottom-6 right-6 h-12 w-12 rounded-full shadow-lg bg-emerald-600 hover:bg-emerald-700" size="icon" onClick={() => setItemDialogOpen(true)}>
+        <Plus className="h-5 w-5" />
+      </Button>
       <Dialog open={itemDialogOpen} onOpenChange={setItemDialogOpen}>
-        <DialogTrigger asChild>
-          <Button className="fixed bottom-6 right-6 h-12 w-12 rounded-full shadow-lg bg-emerald-600 hover:bg-emerald-700" size="icon">
-            <Plus className="h-5 w-5" />
-          </Button>
-        </DialogTrigger>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add New Inventory Item</DialogTitle>
-            <DialogDescription>Create a new item type for tracking</DialogDescription>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>Add New Item</DialogTitle><DialogDescription>Create a new inventory item type</DialogDescription></DialogHeader>
           <div className="grid gap-3 py-2">
-            <div className="grid gap-1.5">
-              <Label>Item Name *</Label>
-              <Input value={itemForm.name} onChange={e => setItemForm(p => ({ ...p, name: e.target.value }))} placeholder="e.g., Auravill Health" />
-            </div>
+            <div className="grid gap-1.5"><Label>Name *</Label><Input value={itemForm.name} onChange={e => setItemForm(p => ({ ...p, name: e.target.value }))} placeholder="e.g., Auravill Health" /></div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="grid gap-1.5">
-                <Label>Category</Label>
+              <div className="grid gap-1.5"><Label>Category</Label>
                 <Select value={itemForm.category} onValueChange={v => setItemForm(p => ({ ...p, category: v }))}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {CATEGORIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                  </SelectContent>
+                  <SelectContent>{CATEGORIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
-              <div className="grid gap-1.5">
-                <Label>Unit Type</Label>
+              <div className="grid gap-1.5"><Label>Unit</Label>
                 <Select value={itemForm.unitType} onValueChange={v => setItemForm(p => ({ ...p, unitType: v }))}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {UNITS.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
-                  </SelectContent>
+                  <SelectContent>{UNITS.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
             </div>
-            <div className="grid gap-1.5">
-              <Label>Sub-Types (comma-separated)</Label>
-              <Input value={itemForm.subTypes} onChange={e => setItemForm(p => ({ ...p, subTypes: e.target.value }))} placeholder="e.g., 50 Pcs Boxes, Loose Pcs in Box" />
-            </div>
+            <div className="grid gap-1.5"><Label>Sub-Types (comma-separated)</Label><Input value={itemForm.subTypes} onChange={e => setItemForm(p => ({ ...p, subTypes: e.target.value }))} placeholder="50 Pcs Boxes, Loose Pcs in Box" /></div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setItemDialogOpen(false)}>Cancel</Button>
