@@ -3,16 +3,46 @@ import { NextResponse } from 'next/server'
 
 const DEFAULT_ITEMS = [
   {
-    name: 'Auravill Health',
+    name: 'Aurawill Health Mix',
     category: 'Health',
     unitType: 'Pack',
     subTypes: JSON.stringify(['50 Pcs Boxes', 'Loose Pcs in Box', 'Packed 1 Pc', 'Packed 2 Pcs', 'Packed 4 Pcs', 'Waiting for Repack']),
   },
   {
-    name: 'Auravill Cover',
+    name: 'Aurawill Cover',
     category: 'Cover',
     unitType: 'Pc',
-    subTypes: JSON.stringify(['50 Pcs Carton Box', '1 Pc Cover (6.5*11)', '2 Pcs Carton Box', '4 Pcs Carton Box', '24 Pcs Amazon Box']),
+    subTypes: JSON.stringify(['Pc']),
+  },
+  {
+    name: '50 Pcs Carton Box',
+    category: 'Packaging',
+    unitType: 'Box',
+    subTypes: JSON.stringify(['Box']),
+  },
+  {
+    name: '1 Pc Cover (6.5*11)',
+    category: 'Packaging',
+    unitType: 'Pc',
+    subTypes: JSON.stringify(['Pc']),
+  },
+  {
+    name: '2 Pcs Carton Box',
+    category: 'Packaging',
+    unitType: 'Box',
+    subTypes: JSON.stringify(['Box']),
+  },
+  {
+    name: '4 Pcs Carton Box',
+    category: 'Packaging',
+    unitType: 'Box',
+    subTypes: JSON.stringify(['Box']),
+  },
+  {
+    name: '24 Pcs Amazon Box',
+    category: 'Packaging',
+    unitType: 'Box',
+    subTypes: JSON.stringify(['Box']),
   },
   {
     name: 'Wax Ribbon Roll',
@@ -27,13 +57,13 @@ const DEFAULT_ITEMS = [
     subTypes: JSON.stringify(['Roll']),
   },
   {
-    name: 'Auravill Tape',
+    name: 'Aurawill Tape',
     category: 'Consumable',
     unitType: 'Pc',
     subTypes: JSON.stringify(['Pc']),
   },
   {
-    name: 'Batch Printer Cartridge',
+    name: 'Batch Printer Catridge',
     category: 'Equipment',
     unitType: 'Pc',
     subTypes: JSON.stringify(['Pc']),

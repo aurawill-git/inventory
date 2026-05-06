@@ -26,6 +26,7 @@ export type EntryWithItem = {
 export const INWARD_TYPES = [
   'From Production Unit',
   'Purchase',
+  'RTO',
   'Damaged - From Production Unit',
 ] as const
 
