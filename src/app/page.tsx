@@ -29,6 +29,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import {
+  Tooltip as UiTooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { toast } from '@/hooks/use-toast'
 import {
@@ -166,23 +172,34 @@ const NAV_ITEMS: { id: TabId; label: string; icon: React.ElementType; color: str
   { id: 'report', label: 'Report', icon: FileBarChart2, color: 'text-rose-600 dark:text-rose-400', description: 'Reconciliation' },
 ]
 
-function StatCard({ label, value, icon: Icon, gradient, change }: { label: string; value: number; icon: React.ElementType; gradient: string; change?: string }) {
+function StatCard({ label, value, icon: Icon, gradient, change, description }: { label: string; value: number; icon: React.ElementType; gradient: string; change?: string; description?: string }) {
   return (
-    <Card className="relative overflow-hidden border-0 shadow-sm">
-      <div className={`absolute inset-0 opacity-[0.07] ${gradient}`} />
-      <CardContent className="p-5">
-        <div className="flex items-start justify-between">
-          <div>
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">{label}</p>
-            <p className="text-3xl font-bold text-foreground leading-none">{value.toLocaleString()}</p>
-            {change && <p className="text-xs text-muted-foreground mt-1.5">{change}</p>}
-          </div>
-          <div className={`h-10 w-10 rounded-xl ${gradient} flex items-center justify-center shadow-sm`}>
-            <Icon className="h-5 w-5 text-white" />
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+    <TooltipProvider>
+      <UiTooltip delayDuration={300}>
+        <TooltipTrigger asChild>
+          <Card className="relative overflow-hidden border-0 shadow-sm cursor-help">
+            <div className={`absolute inset-0 opacity-[0.07] ${gradient}`} />
+            <CardContent className="p-5">
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">{label}</p>
+                  <p className="text-3xl font-bold text-foreground leading-none">{value.toLocaleString()}</p>
+                  {change && <p className="text-xs text-muted-foreground mt-1.5">{change}</p>}
+                </div>
+                <div className={`h-10 w-10 rounded-xl ${gradient} flex items-center justify-center shadow-sm`}>
+                  <Icon className="h-5 w-5 text-white" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </TooltipTrigger>
+        {description && (
+          <TooltipContent className="max-w-[200px] text-xs py-2 px-3 rounded-lg shadow-lg border-slate-200 dark:border-slate-800">
+            {description}
+          </TooltipContent>
+        )}
+      </UiTooltip>
+    </TooltipProvider>
   )
 }
 
@@ -690,10 +707,10 @@ export default function InventoryApp() {
               </div>
 
               <div className="grid gap-4 grid-cols-2 xl:grid-cols-4">
-                <StatCard label="Total Inward" value={summary?.totalInward || 0} icon={TrendingUp} gradient="bg-gradient-to-br from-emerald-500 to-emerald-600" change="All time stock received" />
-                <StatCard label="Total Outward" value={summary?.totalOutward || 0} icon={TrendingDown} gradient="bg-gradient-to-br from-red-500 to-red-600" change="All time dispatched" />
-                <StatCard label="Closing Stock" value={summary?.totalClosing || 0} icon={Archive} gradient="bg-gradient-to-br from-amber-500 to-amber-600" change="Current balance" />
-                <StatCard label="Net Movement" value={summary?.netMovement || 0} icon={ArrowUpDown} gradient="bg-gradient-to-br from-violet-500 to-violet-600" change="Inward minus outward" />
+                <StatCard label="Total Inward" value={summary?.totalInward || 0} icon={TrendingUp} gradient="bg-gradient-to-br from-emerald-500 to-emerald-600" change="All time stock received" description="Cumulative quantity of all stock received across all items." />
+                <StatCard label="Total Outward" value={summary?.totalOutward || 0} icon={TrendingDown} gradient="bg-gradient-to-br from-red-500 to-red-600" change="All time dispatched" description="Cumulative quantity of all stock dispatched or used." />
+                <StatCard label="Closing Stock" value={summary?.totalClosing || 0} icon={Archive} gradient="bg-gradient-to-br from-amber-500 to-amber-600" change="Current balance" description="Current physical stock remaining in inventory across all items." />
+                <StatCard label="Net Movement" value={summary?.netMovement || 0} icon={ArrowUpDown} gradient="bg-gradient-to-br from-violet-500 to-violet-600" change="Inward minus outward" description="The net difference between total stock received and total stock dispatched." />
               </div>
 
               <div className="grid gap-4 lg:grid-cols-2">
@@ -1660,24 +1677,33 @@ export default function InventoryApp() {
                 <>
                   <div className="grid gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
                     {[
-                      { label: 'Total Items', val: report.summary.total, icon: Package, bg: 'bg-slate-100 dark:bg-slate-800', color: 'text-slate-600 dark:text-slate-300', filter: 'all' },
-                      { label: 'Matched', val: report.summary.matched, icon: CheckCircle2, bg: 'bg-emerald-50 dark:bg-emerald-900/30', color: 'text-emerald-600 dark:text-emerald-400', filter: 'matched' },
-                      { label: 'Surplus', val: report.summary.surplus, icon: TrendingUp, bg: 'bg-blue-50 dark:bg-blue-900/30', color: 'text-blue-600 dark:text-blue-400', filter: 'surplus' },
-                      { label: 'Shortage', val: report.summary.shortage, icon: TrendingDown, bg: 'bg-red-50 dark:bg-red-900/30', color: 'text-red-600 dark:text-red-400', filter: 'shortage' },
-                      { label: 'No Closing', val: report.summary.no_closing, icon: AlertTriangle, bg: 'bg-amber-50 dark:bg-amber-900/30', color: 'text-amber-600 dark:text-amber-400', filter: 'no_closing' },
-                      { label: 'No Movement', val: report.summary.no_movement, icon: MinusCircle, bg: 'bg-slate-50 dark:bg-slate-800/60', color: 'text-slate-400', filter: 'no_movement' },
+                      { label: 'Total Items', val: report.summary.total, icon: Package, bg: 'bg-slate-100 dark:bg-slate-800', color: 'text-slate-600 dark:text-slate-300', filter: 'all', desc: 'Total number of unique products in this report.' },
+                      { label: 'Matched', val: report.summary.matched, icon: CheckCircle2, bg: 'bg-emerald-50 dark:bg-emerald-900/30', color: 'text-emerald-600 dark:text-emerald-400', filter: 'matched', desc: 'Items where system expected stock matches physical count.' },
+                      { label: 'Surplus', val: report.summary.surplus, icon: TrendingUp, bg: 'bg-blue-50 dark:bg-blue-900/30', color: 'text-blue-600 dark:text-blue-400', filter: 'surplus', desc: 'Items where physical count is higher than expected (extra stock).' },
+                      { label: 'Shortage', val: report.summary.shortage, icon: TrendingDown, bg: 'bg-red-50 dark:bg-red-900/30', color: 'text-red-600 dark:text-red-400', filter: 'shortage', desc: 'Items where physical count is lower than expected (missing stock).' },
+                      { label: 'No Closing', val: report.summary.no_closing, icon: AlertTriangle, bg: 'bg-amber-50 dark:bg-amber-900/30', color: 'text-amber-600 dark:text-amber-400', filter: 'no_closing', desc: 'Items with movement but no physical count recorded.' },
+                      { label: 'No Movement', val: report.summary.no_movement, icon: MinusCircle, bg: 'bg-slate-50 dark:bg-slate-800/60', color: 'text-slate-400', filter: 'no_movement', desc: 'Items with no activity during this date range.' },
                     ].map(s => {
                       const Icon = s.icon
                       const isActive = reportStatusFilter === s.filter
                       return (
-                        <button key={s.label} onClick={() => setReportStatusFilter(isActive ? 'all' : s.filter)}
-                          className={`text-left p-4 rounded-2xl border transition-all ${isActive ? 'border-slate-400 dark:border-slate-500 ring-2 ring-slate-300 dark:ring-slate-600' : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'} bg-white dark:bg-slate-900 shadow-sm`}>
-                          <div className={`h-9 w-9 rounded-xl ${s.bg} flex items-center justify-center mb-2`}>
-                            <Icon className={`h-4.5 w-4.5 ${s.color}`} />
-                          </div>
-                          <p className="text-2xl font-bold text-slate-900 dark:text-slate-100 leading-none">{s.val}</p>
-                          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-medium">{s.label}</p>
-                        </button>
+                        <TooltipProvider key={s.label}>
+                          <UiTooltip delayDuration={300}>
+                            <TooltipTrigger asChild>
+                              <button onClick={() => setReportStatusFilter(isActive ? 'all' : s.filter)}
+                                className={`text-left p-4 rounded-2xl border transition-all ${isActive ? 'border-slate-400 dark:border-slate-500 ring-2 ring-slate-300 dark:ring-slate-600' : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'} bg-white dark:bg-slate-900 shadow-sm cursor-help`}>
+                                <div className={`h-9 w-9 rounded-xl ${s.bg} flex items-center justify-center mb-2`}>
+                                  <Icon className={`h-4.5 w-4.5 ${s.color}`} />
+                                </div>
+                                <p className="text-2xl font-bold text-slate-900 dark:text-slate-100 leading-none">{s.val}</p>
+                                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-medium">{s.label}</p>
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent className="max-w-[200px] text-xs py-2 px-3 rounded-lg shadow-lg border-slate-200 dark:border-slate-800">
+                              {s.desc}
+                            </TooltipContent>
+                          </UiTooltip>
+                        </TooltipProvider>
                       )
                     })}
                   </div>
@@ -1724,11 +1750,46 @@ export default function InventoryApp() {
                               <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600 dark:text-slate-400 w-8"></th>
                               <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600 dark:text-slate-400">Item</th>
                               <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600 dark:text-slate-400">Category</th>
-                              <th className="px-4 py-3 text-right text-xs font-semibold text-emerald-600 dark:text-emerald-400">Inward</th>
-                              <th className="px-4 py-3 text-right text-xs font-semibold text-red-500 dark:text-red-400">Outward</th>
-                              <th className="px-4 py-3 text-right text-xs font-semibold text-violet-600 dark:text-violet-400">Expected Closing</th>
-                              <th className="px-4 py-3 text-right text-xs font-semibold text-amber-600 dark:text-amber-400 bg-amber-50/60 dark:bg-amber-900/10">Recorded Closing</th>
-                              <th className="px-4 py-3 text-right text-xs font-semibold text-slate-600 dark:text-slate-400">Variance</th>
+                              <TooltipProvider>
+                                <UiTooltip delayDuration={300}>
+                                  <TooltipTrigger asChild>
+                                    <th className="px-4 py-3 text-right text-xs font-semibold text-emerald-600 dark:text-emerald-400 cursor-help">Inward</th>
+                                  </TooltipTrigger>
+                                  <TooltipContent className="text-xs">Total stock received during the selected movement range.</TooltipContent>
+                                </UiTooltip>
+                              </TooltipProvider>
+                              <TooltipProvider>
+                                <UiTooltip delayDuration={300}>
+                                  <TooltipTrigger asChild>
+                                    <th className="px-4 py-3 text-right text-xs font-semibold text-red-500 dark:text-red-400 cursor-help">Outward</th>
+                                  </TooltipTrigger>
+                                  <TooltipContent className="text-xs">Total stock dispatched during the selected movement range.</TooltipContent>
+                                </UiTooltip>
+                              </TooltipProvider>
+                              <TooltipProvider>
+                                <UiTooltip delayDuration={300}>
+                                  <TooltipTrigger asChild>
+                                    <th className="px-4 py-3 text-right text-xs font-semibold text-violet-600 dark:text-violet-400 cursor-help">Expected Closing</th>
+                                  </TooltipTrigger>
+                                  <TooltipContent className="text-xs">Theoretical stock balance based on previous records + inward - outward.</TooltipContent>
+                                </UiTooltip>
+                              </TooltipProvider>
+                              <TooltipProvider>
+                                <UiTooltip delayDuration={300}>
+                                  <TooltipTrigger asChild>
+                                    <th className="px-4 py-3 text-right text-xs font-semibold text-amber-600 dark:text-amber-400 bg-amber-50/60 dark:bg-amber-900/10 cursor-help">Recorded Closing</th>
+                                  </TooltipTrigger>
+                                  <TooltipContent className="text-xs">Actual physical count entered for the closing date.</TooltipContent>
+                                </UiTooltip>
+                              </TooltipProvider>
+                              <TooltipProvider>
+                                <UiTooltip delayDuration={300}>
+                                  <TooltipTrigger asChild>
+                                    <th className="px-4 py-3 text-right text-xs font-semibold text-slate-600 dark:text-slate-400 cursor-help">Variance</th>
+                                  </TooltipTrigger>
+                                  <TooltipContent className="text-xs">Difference between Recorded and Expected closing stock. 0 means matched.</TooltipContent>
+                                </UiTooltip>
+                              </TooltipProvider>
                               <th className="px-4 py-3 text-center text-xs font-semibold text-slate-600 dark:text-slate-400">Status</th>
                             </tr>
                           </thead>
