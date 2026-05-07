@@ -3,66 +3,72 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model InventoryItem {
   id          String   @id @default(cuid())
   name        String
-  category    String   // Health, Cover, Packaging, Consumable, Equipment
-  unitType    String   // Box, Pc, Roll, Pack
-  subTypes    String   // JSON array of sub-type strings, e.g. ["50 Pcs Boxes","Loose Pcs in Box"]
+  category    String
+  unitType    String
+  subTypes    String
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   inwardEntries    InwardEntry[]
   outwardEntries   OutwardEntry[]
   closingEntries   ClosingEntry[]
+
 }
 
 model InwardEntry {
-  id        String   @id @default(cuid())
+  id        String        @id @default(cuid())
   itemId    String
   item      InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
-  type      String   // From Production Unit, Purchase, Damaged - From Production Unit
+  type      String
   qty       Float
-  unit      String   // Pack, Pc, Box, Roll
+  unit      String
   remarks   String?
-  date      DateTime // The business date of the entry
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  date      DateTime
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
 }
 
 model OutwardEntry {
-  id        String   @id @default(cuid())
+  id        String        @id @default(cuid())
   itemId    String
   item      InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
-  type      String   // Prepaid Orders, Customer Care, COD-Speed Post, COD-Business Parcel, Bluedart, Amazon, Meesho, Sample, Damaged, Offline Sales, Sent to Tiruchengode, Used for Repacking, Consumed
+  type      String
   qty       Float
-  unit      String   // Pack, Pc, Box, Roll
+  unit      String
   remarks   String?
-  date      DateTime // The business date of the entry
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  date      DateTime
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
 }
 
 model ClosingEntry {
-  id        String   @id @default(cuid())
+  id        String        @id @default(cuid())
   itemId    String
   item      InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
-  type      String   // e.g. 50 Pcs Boxes, Loose Pcs in Box, Packed 1 Pc, etc.
+  type      String
   qty       Float
-  unit      String   // Box, Pc, Roll
-  box       String?  // Yellow editable field
-  date      DateTime // The business date
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  unit      String
+  box       String?
+  date      DateTime
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
 }
 
 model Settings {
   id        String   @id @default(cuid())
   key       String   @unique
-  value     String   // JSON string for complex settings
+  value     String
   updatedAt DateTime @updatedAt
+
 }

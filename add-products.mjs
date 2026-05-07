@@ -1,7 +1,6 @@
 import { PrismaClient } from '@prisma/client'
 
-process.env.DATABASE_URL = 'file:./prisma/db/custom.db'
-const db = new PrismaClient({ datasources: { db: { url: 'file:./prisma/db/custom.db' } } })
+const db = new PrismaClient()
 
 const PRODUCTS = [
   { name: 'Aurawill Health Mix',    category: 'Health',      unitType: 'Pack', subTypes: JSON.stringify(['50 Pcs Boxes', 'Loose Pcs in Box', 'Packed 1 Pc', 'Packed 2 Pcs', 'Packed 4 Pcs', 'Waiting for Repack']) },
