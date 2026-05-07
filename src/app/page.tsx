@@ -91,6 +91,7 @@ import {
   formatDate,
   formatTimestamp,
 } from '@/lib/inventory-types'
+import * as XLSX from 'xlsx'
 
 const CHART_COLORS = ['#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#f97316', '#ec4899', '#6366f1', '#14b8a6', '#e11d48', '#84cc16', '#a855f7']
 
@@ -135,8 +136,7 @@ function useMounted() {
   return mounted
 }
 
-function useTodayString() {
-  const mounted = useMounted()
+function useTodayString(mounted: boolean) {
   return mounted ? `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}` : ''
 }
 
@@ -150,9 +150,8 @@ interface QuickRow {
   box: string
 }
 
-let rowIdCounter = 0
-function newQuickRow(): QuickRow {
-  return { id: `qr-${++rowIdCounter}`, itemId: '', type: '', qty: '', unit: 'Pack', remarks: '', box: '' }
+function newQuickRow(counter: number): QuickRow {
+  return { id: `qr-${counter}`, itemId: '', type: '', qty: '', unit: 'Pack', remarks: '', box: '' }
 }
 
 type TabId = 'dashboard' | 'inwards' | 'outwards' | 'closing' | 'analytics' | 'products' | 'report'
@@ -189,7 +188,7 @@ function StatCard({ label, value, icon: Icon, gradient, change }: { label: strin
 
 export default function InventoryApp() {
   const mounted = useMounted()
-  const todayStr = useTodayString()
+  const todayStr = useTodayString(mounted)
 
   const [activeTab, setActiveTab] = useState<TabId>('dashboard')
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -212,11 +211,11 @@ export default function InventoryApp() {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
   const [closingDate, setClosingDate] = useState('')
 
-  const [inwardRows, setInwardRows] = useState<QuickRow[]>([newQuickRow()])
+  const [inwardRows, setInwardRows] = useState<QuickRow[]>([])
   const [inwardEntryDate, setInwardEntryDate] = useState('')
-  const [outwardRows, setOutwardRows] = useState<QuickRow[]>([newQuickRow()])
+  const [outwardRows, setOutwardRows] = useState<QuickRow[]>([])
   const [outwardEntryDate, setOutwardEntryDate] = useState('')
-  const [closingRows, setClosingRows] = useState<QuickRow[]>([newQuickRow()])
+  const [closingRows, setClosingRows] = useState<QuickRow[]>([])
   const [closingEntryDate, setClosingEntryDate] = useState('')
 
   const [editingCell, setEditingCell] = useState<string | null>(null)
@@ -228,14 +227,22 @@ export default function InventoryApp() {
   const [isEditingItem, setIsEditingItem] = useState(false)
 
   const [datesInitialized, setDatesInitialized] = useState(false)
-  if (mounted && !datesInitialized) {
-    setDatesInitialized(true)
-    const t = todayStr
-    setClosingDate(t)
-    setInwardEntryDate(t)
-    setOutwardEntryDate(t)
-    setClosingEntryDate(t)
-  }
+
+  // Initialize rows and dates on mount
+  useEffect(() => {
+    if (mounted && !datesInitialized) {
+      setDatesInitialized(true)
+      const t = todayStr || `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`
+      setClosingDate(t)
+      setInwardEntryDate(t)
+      setOutwardEntryDate(t)
+      setClosingEntryDate(t)
+
+      setInwardRows([newQuickRow(1)])
+      setOutwardRows([newQuickRow(1)])
+      setClosingRows([newQuickRow(1)])
+    }
+  }, [mounted, datesInitialized, todayStr])
 
   const [refreshKey, setRefreshKey] = useState(0)
   const refreshData = useCallback(() => setRefreshKey(k => k + 1), [])
@@ -304,16 +311,16 @@ export default function InventoryApp() {
   const updateRow = (setter: React.Dispatch<React.SetStateAction<QuickRow[]>>, rowId: string, field: keyof QuickRow, value: string) => {
     setter(prev => prev.map(r => r.id === rowId ? { ...r, [field]: value } : r))
   }
-  const addRow = (setter: React.Dispatch<React.SetStateAction<QuickRow[]>>) => setter(prev => [...prev, newQuickRow()])
+  const addRow = (setter: React.Dispatch<React.SetStateAction<QuickRow[]>>) => setter(prev => [...prev, newQuickRow(prev.length + 1)])
   const removeRow = (setter: React.Dispatch<React.SetStateAction<QuickRow[]>>, rowId: string) => setter(prev => prev.length > 1 ? prev.filter(r => r.id !== rowId) : prev)
-  const duplicateLastRow = (setter: React.Dispatch<React.SetStateAction<QuickRow[]>>) => setter(prev => { const last = prev[prev.length - 1]; return [...prev, { ...last, id: `qr-${++rowIdCounter}`, qty: '' }] })
+  const duplicateLastRow = (setter: React.Dispatch<React.SetStateAction<QuickRow[]>>) => setter(prev => { const last = prev[prev.length - 1]; return [...prev, { ...last, id: `qr-${prev.length + 1}`, qty: '' }] })
 
   const submitInwardRows = async () => {
     const validRows = inwardRows.filter(r => r.itemId && r.type && r.qty)
     if (validRows.length === 0) { toast({ title: 'Error', description: 'Fill at least one row with Item, Type, and Qty', variant: 'destructive' }); return }
     try {
       const results = await Promise.all(validRows.map(row => fetch('/api/inwards', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itemId: row.itemId, type: row.type, qty: row.qty, unit: row.unit, remarks: row.remarks, date: inwardEntryDate }) })))
-      if (results.every(r => r.ok)) { toast({ title: `${validRows.length} inward entries added` }); setInwardRows([newQuickRow()]); refreshData() }
+      if (results.every(r => r.ok)) { toast({ title: `${validRows.length} inward entries added` }); setInwardRows([newQuickRow(1)]); refreshData() }
     } catch (e) { console.error(e) }
   }
 
@@ -322,7 +329,7 @@ export default function InventoryApp() {
     if (validRows.length === 0) { toast({ title: 'Error', description: 'Fill at least one row with Item, Type, and Qty', variant: 'destructive' }); return }
     try {
       const results = await Promise.all(validRows.map(row => fetch('/api/outwards', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itemId: row.itemId, type: row.type, qty: row.qty, unit: row.unit, remarks: row.remarks, date: outwardEntryDate }) })))
-      if (results.every(r => r.ok)) { toast({ title: `${validRows.length} outward entries added` }); setOutwardRows([newQuickRow()]); refreshData() }
+      if (results.every(r => r.ok)) { toast({ title: `${validRows.length} outward entries added` }); setOutwardRows([newQuickRow(1)]); refreshData() }
     } catch (e) { console.error(e) }
   }
 
@@ -331,7 +338,7 @@ export default function InventoryApp() {
     if (validRows.length === 0) { toast({ title: 'Error', description: 'Fill at least one row', variant: 'destructive' }); return }
     try {
       const results = await Promise.all(validRows.map(row => fetch('/api/closing', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itemId: row.itemId, type: row.type, qty: row.qty, unit: row.unit, box: row.box, date: closingEntryDate }) })))
-      if (results.every(r => r.ok)) { toast({ title: `${validRows.length} closing entries added` }); setClosingRows([newQuickRow()]); refreshData() }
+      if (results.every(r => r.ok)) { toast({ title: `${validRows.length} closing entries added` }); setClosingRows([newQuickRow(1)]); refreshData() }
     } catch (e) { console.error(e) }
   }
 
@@ -397,6 +404,112 @@ export default function InventoryApp() {
   const inwardByItem = (analytics?.inwardByItem as { itemId: string; name: string; qty: number }[]) || []
   const outwardByItem = (analytics?.outwardByItem as { itemId: string; name: string; qty: number }[]) || []
 
+  // ── Bulk Actions ──
+  const loadChecklist = (setter: React.Dispatch<React.SetStateAction<QuickRow[]>>) => {
+    if (items.length === 0) return
+    const newRows: QuickRow[] = []
+    let counter = 1
+    items.forEach(item => {
+      try {
+        const subTypes = JSON.parse(item.subTypes || '[]') as string[]
+        if (subTypes.length === 0) {
+          const row = newQuickRow(counter++)
+          row.itemId = item.id
+          row.unit = item.unitType
+          row.type = item.unitType
+          newRows.push(row)
+        } else {
+          subTypes.forEach(st => {
+            const row = newQuickRow(counter++)
+            row.itemId = item.id
+            row.unit = item.unitType
+            row.type = st
+            newRows.push(row)
+          })
+        }
+      } catch (e) {
+        const row = newQuickRow(counter++)
+        row.itemId = item.id
+        row.unit = item.unitType
+        row.type = item.unitType
+        newRows.push(row)
+      }
+    })
+    setter(newRows)
+    toast({ title: 'Checklist Loaded', description: `Created ${newRows.length} rows for all products.` })
+  }
+
+  const useExpectedValues = () => {
+    if (!report || report.rows.length === 0) {
+      toast({ title: 'No Data', description: 'Run a report first to see expected values.', variant: 'destructive' })
+      return
+    }
+    const newRows: QuickRow[] = report.rows.map((r, i) => ({
+      id: `qr-auto-${i + 1}`,
+      itemId: r.itemId,
+      type: r.unit, 
+      qty: String(r.expectedClosing),
+      unit: r.unit,
+      remarks: '',
+      box: ''
+    }))
+    setClosingRows(newRows)
+    toast({ title: 'Auto-populated', description: `Loaded ${newRows.length} rows with expected quantities.` })
+  }
+
+  const downloadTemplate = () => {
+    const headers = ['Item', 'Type', 'Qty', 'Unit', 'Remarks', 'Box']
+    const data = items.flatMap(item => {
+      try {
+        const subTypes = JSON.parse(item.subTypes || '[]') as string[]
+        return subTypes.map(st => [item.name, st, '', item.unitType, '', ''])
+      } catch (e) {
+        return [[item.name, item.unitType, '', item.unitType, '', '']]
+      }
+    })
+    const csv = [headers, ...data].map(r => r.map(v => `"${v}"`).join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = `inventory_import_template.csv`; a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, setter: React.Dispatch<React.SetStateAction<QuickRow[]>>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (evt) => {
+      try {
+        const bstr = evt.target?.result
+        const wb = XLSX.read(bstr, { type: 'binary' })
+        const wsname = wb.SheetNames[0]
+        const ws = wb.Sheets[wsname]
+        const data = XLSX.utils.sheet_to_json(ws) as any[]
+
+        const newRows: QuickRow[] = data.map((d, i) => {
+          const itemName = String(d.Item || d.item || '').trim()
+          const item = items.find(it => it.name.toLowerCase() === itemName.toLowerCase())
+          return {
+            id: `qr-imp-${i + 1}`,
+            itemId: item?.id || '',
+            type: String(d.Type || d.type || ''),
+            qty: String(d.Qty || d.qty || ''),
+            unit: String(d.Unit || d.unit || item?.unitType || 'Pack'),
+            remarks: String(d.Remarks || d.remarks || ''),
+            box: String(d.Box || d.box || '')
+          }
+        })
+        setter(newRows)
+        toast({ title: 'Import Successful', description: `Loaded ${newRows.length} rows from file.` })
+      } catch (err) {
+        console.error(err)
+        toast({ title: 'Import Failed', description: 'Invalid file format.', variant: 'destructive' })
+      }
+    }
+    reader.readAsBinaryString(file)
+    e.target.value = '' // Reset input
+  }
+
   const cp = compactMode ? 'px-3 py-1.5' : 'px-4 py-3'
   const hp = compactMode ? 'px-3 py-2' : 'px-4 py-3'
 
@@ -421,10 +534,10 @@ export default function InventoryApp() {
           </div>
           <div className="flex items-center gap-2 text-muted-foreground text-sm">
             <RefreshCw className="h-4 w-4 animate-spin" />
-            <span>Loading Inventory Manager…</span>
+            <span>Loading Inventory Manager...</span>
           </div>
           <button 
-            onClick={() => window.location.reload()} 
+            onClick={() => typeof window !== 'undefined' && window.location.reload()} 
             className="mt-4 text-xs text-slate-400 hover:text-slate-600 underline"
           >
             Stuck? Click to reload
@@ -435,7 +548,7 @@ export default function InventoryApp() {
   }
 
   return (
-    <div className="flex h-screen bg-slate-50 dark:bg-slate-950 overflow-hidden">
+    <div className="flex h-screen bg-slate-50 dark:bg-slate-950 overflow-hidden" suppressHydrationWarning>
 
       {/* ── Sidebar overlay (mobile) ── */}
       {sidebarOpen && (
@@ -728,6 +841,18 @@ export default function InventoryApp() {
                       <div>
                         <CardTitle className="text-sm font-semibold">Quick Entry</CardTitle>
                         <CardDescription className="text-xs">Add multiple inward entries at once</CardDescription>
+                        <div className="flex gap-2 mt-1.5">
+                          <Button variant="outline" size="xs" className="h-6 text-[10px] rounded-md px-2" onClick={() => loadChecklist(setInwardRows)}>
+                            <Rows3 className="h-3 w-3 mr-1" />Checklist Mode
+                          </Button>
+                          <Button variant="outline" size="xs" className="h-6 text-[10px] rounded-md px-2" onClick={() => document.getElementById('inward-file-input')?.click()}>
+                            <Download className="h-3 w-3 mr-1" />Import Excel
+                          </Button>
+                          <input id="inward-file-input" type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={e => handleFileUpload(e, setInwardRows)} />
+                          <Button variant="ghost" size="xs" className="h-6 text-[10px] rounded-md px-2" onClick={downloadTemplate}>
+                            Template
+                          </Button>
+                        </div>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -904,6 +1029,18 @@ export default function InventoryApp() {
                       <div>
                         <CardTitle className="text-sm font-semibold">Quick Entry</CardTitle>
                         <CardDescription className="text-xs">Add multiple outward entries at once</CardDescription>
+                        <div className="flex gap-2 mt-1.5">
+                          <Button variant="outline" size="xs" className="h-6 text-[10px] rounded-md px-2" onClick={() => loadChecklist(setOutwardRows)}>
+                            <Rows3 className="h-3 w-3 mr-1" />Checklist Mode
+                          </Button>
+                          <Button variant="outline" size="xs" className="h-6 text-[10px] rounded-md px-2" onClick={() => document.getElementById('outward-file-input')?.click()}>
+                            <Download className="h-3 w-3 mr-1" />Import Excel
+                          </Button>
+                          <input id="outward-file-input" type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={e => handleFileUpload(e, setOutwardRows)} />
+                          <Button variant="ghost" size="xs" className="h-6 text-[10px] rounded-md px-2" onClick={downloadTemplate}>
+                            Template
+                          </Button>
+                        </div>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -1080,6 +1217,18 @@ export default function InventoryApp() {
                       <div>
                         <CardTitle className="text-sm font-semibold">Quick Entry</CardTitle>
                         <CardDescription className="text-xs">Add closing stock entries</CardDescription>
+                        <div className="flex flex-wrap gap-2 mt-1.5">
+                          <Button variant="outline" size="xs" className="h-6 text-[10px] rounded-md px-2 bg-amber-50/50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800" onClick={useExpectedValues}>
+                            <Activity className="h-3 w-3 mr-1" />Auto-fill Expected
+                          </Button>
+                          <Button variant="outline" size="xs" className="h-6 text-[10px] rounded-md px-2" onClick={() => loadChecklist(setClosingRows)}>
+                            <Rows3 className="h-3 w-3 mr-1" />Load All Products
+                          </Button>
+                          <Button variant="outline" size="xs" className="h-6 text-[10px] rounded-md px-2" onClick={() => document.getElementById('closing-file-input')?.click()}>
+                            <Download className="h-3 w-3 mr-1" />Import Excel
+                          </Button>
+                          <input id="closing-file-input" type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={e => handleFileUpload(e, setClosingRows)} />
+                        </div>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -1153,7 +1302,7 @@ export default function InventoryApp() {
                       <span className="font-semibold text-amber-600">{closingRows.filter(r => r.itemId && r.type && r.qty).length}</span> row(s) ready to submit
                     </span>
                     <div className="flex gap-2">
-                      <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg" onClick={() => setClosingRows([newQuickRow()])}>Clear All</Button>
+                      <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg" onClick={() => setClosingRows([newQuickRow(1)])}>Clear All</Button>
                       <Button size="sm" className="h-8 text-xs rounded-lg bg-amber-600 hover:bg-amber-700 shadow-sm shadow-amber-200 dark:shadow-amber-900" onClick={submitClosingRows}>
                         <Check className="h-3 w-3 mr-1.5" />Submit ({closingRows.filter(r => r.itemId && r.type && r.qty).length})
                       </Button>
