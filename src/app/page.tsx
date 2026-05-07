@@ -90,6 +90,8 @@ import {
 import {
   INWARD_TYPES,
   OUTWARD_TYPES,
+  ITEM_INWARD_TYPES,
+  ITEM_OUTWARD_TYPES,
   UNITS,
   CATEGORIES,
   type EntryWithItem,
@@ -332,6 +334,59 @@ export default function InventoryApp() {
   const removeRow = (setter: React.Dispatch<React.SetStateAction<QuickRow[]>>, rowId: string) => setter(prev => prev.length > 1 ? prev.filter(r => r.id !== rowId) : prev)
   const duplicateLastRow = (setter: React.Dispatch<React.SetStateAction<QuickRow[]>>) => setter(prev => { const last = prev[prev.length - 1]; return [...prev, { ...last, id: `qr-${prev.length + 1}`, qty: '' }] })
 
+  // Excel-like keyboard navigation for quick entry tables
+  // Cells are identified by data-cell="tableId:rowIdx:colIdx"
+  const focusCell = useCallback((tableId: string, rowIdx: number, colIdx: number) => {
+    const el = document.querySelector(`[data-cell="${tableId}:${rowIdx}:${colIdx}"]`) as HTMLElement | null
+    if (!el) return
+    const input = el.tagName === 'INPUT' ? el : el.querySelector('input,button,[tabindex]') as HTMLElement | null
+    if (input) { input.focus(); if (input.tagName === 'INPUT') (input as HTMLInputElement).select() }
+  }, [])
+
+  const handleCellKeyDown = useCallback((
+    e: React.KeyboardEvent,
+    tableId: string,
+    rowIdx: number,
+    colIdx: number,
+    totalCols: number,
+    rows: QuickRow[],
+    setter: React.Dispatch<React.SetStateAction<QuickRow[]>>
+  ) => {
+    const isEnterOrTab = e.key === 'Enter' || (e.key === 'Tab' && !e.shiftKey)
+    const isShiftTab = e.key === 'Tab' && e.shiftKey
+    const isDown = e.key === 'ArrowDown'
+    const isUp = e.key === 'ArrowUp'
+
+    if (isEnterOrTab || isShiftTab || isDown || isUp) {
+      e.preventDefault()
+
+      let nextRow = rowIdx
+      let nextCol = colIdx
+
+      if (isEnterOrTab) {
+        nextCol = colIdx + 1
+        if (nextCol >= totalCols) { nextCol = 0; nextRow = rowIdx + 1 }
+      } else if (isShiftTab) {
+        nextCol = colIdx - 1
+        if (nextCol < 0) { nextCol = totalCols - 1; nextRow = rowIdx - 1 }
+      } else if (isDown) {
+        nextRow = rowIdx + 1
+      } else if (isUp) {
+        nextRow = rowIdx - 1
+      }
+
+      if (nextRow < 0) return
+
+      // Auto-add row when navigating past last row
+      if (nextRow >= rows.length) {
+        setter(prev => [...prev, newQuickRow(prev.length + 1)])
+        setTimeout(() => focusCell(tableId, nextRow, nextCol), 30)
+      } else {
+        focusCell(tableId, nextRow, nextCol)
+      }
+    }
+  }, [focusCell])
+
   const submitInwardRows = async () => {
     const validRows = inwardRows.filter(r => r.itemId && r.type && r.qty)
     if (validRows.length === 0) { toast({ title: 'Error', description: 'Fill at least one row with Item, Type, and Qty', variant: 'destructive' }); return }
@@ -422,38 +477,83 @@ export default function InventoryApp() {
   const outwardByItem = (analytics?.outwardByItem as { itemId: string; name: string; qty: number }[]) || []
 
   // ── Bulk Actions ──
-  const loadChecklist = (setter: React.Dispatch<React.SetStateAction<QuickRow[]>>) => {
+  // Inward checklist: one row per item × item-specific inward types (from xlsx)
+  const loadInwardChecklist = () => {
+    if (items.length === 0) return
+    const newRows: QuickRow[] = []
+    let counter = 1
+    items.forEach(item => {
+      const types = ITEM_INWARD_TYPES[item.name] || ['Purchase']
+      types.forEach(type => {
+        const row = newQuickRow(counter++)
+        row.itemId = item.id
+        row.unit = item.unitType
+        row.type = type
+        newRows.push(row)
+      })
+    })
+    setInwardRows(newRows)
+    toast({ title: 'Checklist Loaded', description: `${newRows.length} rows — fill Qty only.` })
+  }
+
+  // Outward checklist: one row per item × item-specific outward types (from xlsx)
+  const loadOutwardChecklist = () => {
+    if (items.length === 0) return
+    const newRows: QuickRow[] = []
+    let counter = 1
+    items.forEach(item => {
+      const types = ITEM_OUTWARD_TYPES[item.name] || ['Consumed']
+      types.forEach(type => {
+        const row = newQuickRow(counter++)
+        row.itemId = item.id
+        row.unit = item.unitType
+        row.type = type
+        newRows.push(row)
+      })
+    })
+    setOutwardRows(newRows)
+    toast({ title: 'Checklist Loaded', description: `${newRows.length} rows — fill Qty only.` })
+  }
+
+  // Generic fallback (kept for safety)
+  const loadChecklist = (setter: React.Dispatch<React.SetStateAction<QuickRow[]>>, defaultType?: string) => {
+    if (items.length === 0) return
+    const newRows: QuickRow[] = items.map((item, i) => {
+      const row = newQuickRow(i + 1)
+      row.itemId = item.id
+      row.unit = item.unitType
+      if (defaultType) row.type = defaultType
+      return row
+    })
+    setter(newRows)
+    toast({ title: 'Checklist Loaded', description: `${newRows.length} rows ready.` })
+  }
+
+  // For closing: one row per item × subType
+  const loadChecklistClosing = () => {
     if (items.length === 0) return
     const newRows: QuickRow[] = []
     let counter = 1
     items.forEach(item => {
       try {
         const subTypes = JSON.parse(item.subTypes || '[]') as string[]
-        if (subTypes.length === 0) {
+        const types = subTypes.length > 0 ? subTypes : [item.unitType]
+        types.forEach(st => {
           const row = newQuickRow(counter++)
           row.itemId = item.id
           row.unit = item.unitType
-          row.type = item.unitType
+          row.type = st
           newRows.push(row)
-        } else {
-          subTypes.forEach(st => {
-            const row = newQuickRow(counter++)
-            row.itemId = item.id
-            row.unit = item.unitType
-            row.type = st
-            newRows.push(row)
-          })
-        }
-      } catch (e) {
+        })
+      } catch {
         const row = newQuickRow(counter++)
         row.itemId = item.id
         row.unit = item.unitType
-        row.type = item.unitType
         newRows.push(row)
       }
     })
-    setter(newRows)
-    toast({ title: 'Checklist Loaded', description: `Created ${newRows.length} rows for all products.` })
+    setClosingRows(newRows)
+    toast({ title: 'Checklist Loaded', description: `${newRows.length} rows with sub-types pre-filled.` })
   }
 
   const useExpectedValues = () => {
@@ -859,7 +959,7 @@ export default function InventoryApp() {
                         <CardTitle className="text-sm font-semibold">Quick Entry</CardTitle>
                         <CardDescription className="text-xs">Add multiple inward entries at once</CardDescription>
                         <div className="flex gap-2 mt-1.5">
-                          <Button variant="outline" size="xs" className="h-6 text-[10px] rounded-md px-2" onClick={() => loadChecklist(setInwardRows)}>
+                          <Button variant="outline" size="xs" className="h-6 text-[10px] rounded-md px-2" onClick={loadInwardChecklist}>
                             <Rows3 className="h-3 w-3 mr-1" />Checklist Mode
                           </Button>
                           <Button variant="outline" size="xs" className="h-6 text-[10px] rounded-md px-2" onClick={() => document.getElementById('inward-file-input')?.click()}>
@@ -879,67 +979,84 @@ export default function InventoryApp() {
                   </div>
                 </CardHeader>
                 <CardContent className="px-5 pb-5">
+                  {(() => {
+                    const groupColors = ['bg-emerald-50/60 dark:bg-emerald-900/10','bg-sky-50/60 dark:bg-sky-900/10','bg-violet-50/60 dark:bg-violet-900/10','bg-rose-50/60 dark:bg-rose-900/10','bg-amber-50/60 dark:bg-amber-900/10','bg-teal-50/60 dark:bg-teal-900/10','bg-orange-50/60 dark:bg-orange-900/10','bg-pink-50/60 dark:bg-pink-900/10']
+                    const groupBorder = ['border-l-emerald-400','border-l-sky-400','border-l-violet-400','border-l-rose-400','border-l-amber-400','border-l-teal-400','border-l-orange-400','border-l-pink-400']
+                    let groupIdx = -1; let lastItemId = ''
+                    return (
                   <div className="overflow-x-auto rounded-xl border border-slate-100 dark:border-slate-800">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-xs">
                       <thead>
                         <tr className="bg-slate-50 dark:bg-slate-800/60">
-                          <th className={`${hp} text-left text-xs font-semibold text-slate-600 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800`}>Item *</th>
-                          <th className={`${hp} text-left text-xs font-semibold text-slate-600 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800`}>Type *</th>
-                          <th className={`${hp} text-left text-xs font-semibold text-slate-600 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800 w-24`}>Qty *</th>
-                          <th className={`${hp} text-left text-xs font-semibold text-slate-600 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800 w-24`}>Unit</th>
-                          <th className={`${hp} text-left text-xs font-semibold text-amber-600 dark:text-amber-400 border-b border-amber-100 dark:border-amber-900/50 bg-amber-50/60 dark:bg-amber-900/10`}>Remarks</th>
-                          <th className={`${hp} w-20 border-b border-slate-100 dark:border-slate-800`}></th>
+                          <th className="px-3 py-2 text-left text-[11px] font-semibold text-slate-500 border-b border-slate-100 dark:border-slate-800 w-[200px]">Item</th>
+                          <th className="px-3 py-2 text-left text-[11px] font-semibold text-slate-500 border-b border-slate-100 dark:border-slate-800">Type</th>
+                          <th className="px-3 py-2 text-left text-[11px] font-semibold text-slate-500 border-b border-slate-100 dark:border-slate-800 w-20">Qty *</th>
+                          <th className="px-3 py-2 text-left text-[11px] font-semibold text-slate-500 border-b border-slate-100 dark:border-slate-800 w-20">Unit</th>
+                          <th className="px-3 py-2 text-left text-[11px] font-semibold text-amber-500 border-b border-amber-100 dark:border-amber-900/50 bg-amber-50/40 dark:bg-amber-900/10">Remarks</th>
+                          <th className="px-2 py-2 w-14 border-b border-slate-100 dark:border-slate-800"></th>
                         </tr>
                       </thead>
                       <tbody>
-                        {inwardRows.map((row, idx) => (
-                          <tr key={row.id} className="border-b border-slate-50 dark:border-slate-800/50 last:border-0 hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
-                            <td className={cp}>
-                              <Select value={row.itemId} onValueChange={v => updateRow(setInwardRows, row.id, 'itemId', v)}>
-                                <SelectTrigger className="h-8 text-xs rounded-lg"><SelectValue placeholder="Select item" /></SelectTrigger>
-                                <SelectContent>{items.map(i => <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>)}</SelectContent>
-                              </Select>
+                        {inwardRows.map((row, idx) => {
+                          if (row.itemId !== lastItemId) { groupIdx++; lastItemId = row.itemId }
+                          const ci = groupIdx % groupColors.length
+                          const isFirst = idx === 0 || inwardRows[idx - 1].itemId !== row.itemId
+                          return (
+                          <tr key={row.id} className={`border-b border-slate-100/80 dark:border-slate-800/40 last:border-0 transition-colors ${groupColors[ci]} border-l-2 ${groupBorder[ci]}`}>
+                            <td className="px-3 py-1.5" data-cell={`inward:${idx}:0`} onKeyDown={e => handleCellKeyDown(e, 'inward', idx, 0, 5, inwardRows, setInwardRows)}>
+                              {isFirst ? (
+                                <Select value={row.itemId} onValueChange={v => { updateRow(setInwardRows, row.id, 'itemId', v); setTimeout(() => focusCell('inward', idx, 1), 30) }}>
+                                  <SelectTrigger className="h-7 text-xs rounded-md border-0 bg-white/70 dark:bg-slate-800/50 shadow-sm"><SelectValue placeholder="Select item" /></SelectTrigger>
+                                  <SelectContent>{items.map(i => <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>)}</SelectContent>
+                                </Select>
+                              ) : (
+                                <span className="text-[10px] text-slate-400 pl-1 italic">↳ same item</span>
+                              )}
                             </td>
-                            <td className={cp}>
-                              <Select value={row.type} onValueChange={v => updateRow(setInwardRows, row.id, 'type', v)}>
-                                <SelectTrigger className="h-8 text-xs rounded-lg"><SelectValue placeholder="Type" /></SelectTrigger>
+                            <td className="px-3 py-1.5" data-cell={`inward:${idx}:1`} onKeyDown={e => handleCellKeyDown(e, 'inward', idx, 1, 5, inwardRows, setInwardRows)}>
+                              <Select value={row.type} onValueChange={v => { updateRow(setInwardRows, row.id, 'type', v); setTimeout(() => focusCell('inward', idx, 2), 30) }}>
+                                <SelectTrigger className="h-7 text-xs rounded-md border-0 bg-white/70 dark:bg-slate-800/50 shadow-sm"><SelectValue placeholder="Type" /></SelectTrigger>
                                 <SelectContent>{INWARD_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
                               </Select>
                             </td>
-                            <td className={cp}>
-                              <Input type="number" min="0" step="0.01" value={row.qty} onChange={e => updateRow(setInwardRows, row.id, 'qty', e.target.value)} className="h-8 text-xs rounded-lg" placeholder="0" />
+                            <td className="px-3 py-1.5" data-cell={`inward:${idx}:2`} onKeyDown={e => handleCellKeyDown(e, 'inward', idx, 2, 5, inwardRows, setInwardRows)}>
+                              <Input type="number" min="0" step="0.01" value={row.qty} onChange={e => updateRow(setInwardRows, row.id, 'qty', e.target.value)} className="h-7 text-xs rounded-md border-0 bg-white/70 dark:bg-slate-800/50 shadow-sm font-semibold" placeholder="0" />
                             </td>
-                            <td className={cp}>
-                              <Select value={row.unit} onValueChange={v => updateRow(setInwardRows, row.id, 'unit', v)}>
-                                <SelectTrigger className="h-8 text-xs rounded-lg"><SelectValue /></SelectTrigger>
+                            <td className="px-3 py-1.5" data-cell={`inward:${idx}:3`} onKeyDown={e => handleCellKeyDown(e, 'inward', idx, 3, 5, inwardRows, setInwardRows)}>
+                              <Select value={row.unit} onValueChange={v => { updateRow(setInwardRows, row.id, 'unit', v); setTimeout(() => focusCell('inward', idx, 4), 30) }}>
+                                <SelectTrigger className="h-7 text-xs rounded-md border-0 bg-white/70 dark:bg-slate-800/50 shadow-sm"><SelectValue /></SelectTrigger>
                                 <SelectContent>{UNITS.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent>
                               </Select>
                             </td>
-                            <td className={`${cp} bg-amber-50/40 dark:bg-amber-900/10`}>
-                              <Input value={row.remarks} onChange={e => updateRow(setInwardRows, row.id, 'remarks', e.target.value)} className="h-8 text-xs rounded-lg bg-transparent" placeholder="Optional note…" />
+                            <td className="px-3 py-1.5 bg-amber-50/50 dark:bg-amber-900/10" data-cell={`inward:${idx}:4`} onKeyDown={e => handleCellKeyDown(e, 'inward', idx, 4, 5, inwardRows, setInwardRows)}>
+                              <Input value={row.remarks} onChange={e => updateRow(setInwardRows, row.id, 'remarks', e.target.value)} className="h-7 text-xs rounded-md border-0 bg-transparent" placeholder="note…" />
                             </td>
-                            <td className={cp}>
-                              <div className="flex gap-1">
-                                <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-slate-400 hover:text-red-500" onClick={() => removeRow(setInwardRows, row.id)}><X className="h-3 w-3" /></Button>
+                            <td className="px-2 py-1.5">
+                              <div className="flex gap-0.5">
+                                <Button variant="ghost" size="icon" className="h-6 w-6 rounded text-slate-300 hover:text-red-500" onClick={() => removeRow(setInwardRows, row.id)}><X className="h-3 w-3" /></Button>
                                 {idx === inwardRows.length - 1 && (
                                   <>
-                                    <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-slate-400 hover:text-emerald-600" onClick={() => addRow(setInwardRows)} title="Add row"><Plus className="h-3 w-3" /></Button>
-                                    <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-slate-400 hover:text-emerald-600" onClick={() => duplicateLastRow(setInwardRows)} title="Duplicate"><Copy className="h-3 w-3" /></Button>
+                                    <Button variant="ghost" size="icon" className="h-6 w-6 rounded text-slate-300 hover:text-emerald-600" onClick={() => addRow(setInwardRows)}><Plus className="h-3 w-3" /></Button>
+                                    <Button variant="ghost" size="icon" className="h-6 w-6 rounded text-slate-300 hover:text-emerald-600" onClick={() => duplicateLastRow(setInwardRows)}><Copy className="h-3 w-3" /></Button>
                                   </>
                                 )}
                               </div>
                             </td>
                           </tr>
-                        ))}
+                          )
+                        })}
                       </tbody>
                     </table>
                   </div>
+                    )
+                  })()}
                   <div className="flex items-center justify-between mt-4">
-                    <span className="text-xs text-slate-400 dark:text-slate-500">
+                    <span className="text-xs text-slate-400 dark:text-slate-500 flex items-center gap-2">
                       <span className="font-semibold text-emerald-600">{inwardRows.filter(r => r.itemId && r.type && r.qty).length}</span> row(s) ready to submit
+                      <span className="hidden sm:inline text-[10px] text-slate-300 dark:text-slate-600 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5">Enter / Tab → next cell &nbsp;·&nbsp; ↑↓ move rows &nbsp;·&nbsp; Enter on last cell → new row</span>
                     </span>
                     <div className="flex gap-2">
-                      <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg" onClick={() => setInwardRows([newQuickRow()])}>Clear All</Button>
+                      <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg" onClick={() => setInwardRows([newQuickRow(1)])}>Clear All</Button>
                       <Button size="sm" className="h-8 text-xs rounded-lg bg-emerald-600 hover:bg-emerald-700 shadow-sm shadow-emerald-200 dark:shadow-emerald-900" onClick={submitInwardRows}>
                         <Check className="h-3 w-3 mr-1.5" />Submit ({inwardRows.filter(r => r.itemId && r.type && r.qty).length})
                       </Button>
@@ -1047,7 +1164,7 @@ export default function InventoryApp() {
                         <CardTitle className="text-sm font-semibold">Quick Entry</CardTitle>
                         <CardDescription className="text-xs">Add multiple outward entries at once</CardDescription>
                         <div className="flex gap-2 mt-1.5">
-                          <Button variant="outline" size="xs" className="h-6 text-[10px] rounded-md px-2" onClick={() => loadChecklist(setOutwardRows)}>
+                          <Button variant="outline" size="xs" className="h-6 text-[10px] rounded-md px-2" onClick={loadOutwardChecklist}>
                             <Rows3 className="h-3 w-3 mr-1" />Checklist Mode
                           </Button>
                           <Button variant="outline" size="xs" className="h-6 text-[10px] rounded-md px-2" onClick={() => document.getElementById('outward-file-input')?.click()}>
@@ -1067,67 +1184,84 @@ export default function InventoryApp() {
                   </div>
                 </CardHeader>
                 <CardContent className="px-5 pb-5">
+                  {(() => {
+                    const groupColors = ['bg-red-50/60 dark:bg-red-900/10','bg-sky-50/60 dark:bg-sky-900/10','bg-violet-50/60 dark:bg-violet-900/10','bg-emerald-50/60 dark:bg-emerald-900/10','bg-amber-50/60 dark:bg-amber-900/10','bg-teal-50/60 dark:bg-teal-900/10','bg-orange-50/60 dark:bg-orange-900/10','bg-pink-50/60 dark:bg-pink-900/10']
+                    const groupBorder = ['border-l-red-400','border-l-sky-400','border-l-violet-400','border-l-emerald-400','border-l-amber-400','border-l-teal-400','border-l-orange-400','border-l-pink-400']
+                    let groupIdx = -1; let lastItemId = ''
+                    return (
                   <div className="overflow-x-auto rounded-xl border border-slate-100 dark:border-slate-800">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-xs">
                       <thead>
                         <tr className="bg-slate-50 dark:bg-slate-800/60">
-                          <th className={`${hp} text-left text-xs font-semibold text-slate-600 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800`}>Item *</th>
-                          <th className={`${hp} text-left text-xs font-semibold text-slate-600 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800`}>Type *</th>
-                          <th className={`${hp} text-left text-xs font-semibold text-slate-600 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800 w-24`}>Qty *</th>
-                          <th className={`${hp} text-left text-xs font-semibold text-slate-600 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800 w-24`}>Unit</th>
-                          <th className={`${hp} text-left text-xs font-semibold text-amber-600 dark:text-amber-400 border-b border-amber-100 dark:border-amber-900/50 bg-amber-50/60 dark:bg-amber-900/10`}>Remarks</th>
-                          <th className={`${hp} w-20 border-b border-slate-100 dark:border-slate-800`}></th>
+                          <th className="px-3 py-2 text-left text-[11px] font-semibold text-slate-500 border-b border-slate-100 dark:border-slate-800 w-[200px]">Item</th>
+                          <th className="px-3 py-2 text-left text-[11px] font-semibold text-slate-500 border-b border-slate-100 dark:border-slate-800">Type</th>
+                          <th className="px-3 py-2 text-left text-[11px] font-semibold text-slate-500 border-b border-slate-100 dark:border-slate-800 w-20">Qty *</th>
+                          <th className="px-3 py-2 text-left text-[11px] font-semibold text-slate-500 border-b border-slate-100 dark:border-slate-800 w-20">Unit</th>
+                          <th className="px-3 py-2 text-left text-[11px] font-semibold text-amber-500 border-b border-amber-100 dark:border-amber-900/50 bg-amber-50/40 dark:bg-amber-900/10">Remarks</th>
+                          <th className="px-2 py-2 w-14 border-b border-slate-100 dark:border-slate-800"></th>
                         </tr>
                       </thead>
                       <tbody>
-                        {outwardRows.map((row, idx) => (
-                          <tr key={row.id} className="border-b border-slate-50 dark:border-slate-800/50 last:border-0 hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
-                            <td className={cp}>
-                              <Select value={row.itemId} onValueChange={v => updateRow(setOutwardRows, row.id, 'itemId', v)}>
-                                <SelectTrigger className="h-8 text-xs rounded-lg"><SelectValue placeholder="Select item" /></SelectTrigger>
-                                <SelectContent>{items.map(i => <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>)}</SelectContent>
-                              </Select>
+                        {outwardRows.map((row, idx) => {
+                          if (row.itemId !== lastItemId) { groupIdx++; lastItemId = row.itemId }
+                          const ci = groupIdx % groupColors.length
+                          const isFirst = idx === 0 || outwardRows[idx - 1].itemId !== row.itemId
+                          return (
+                          <tr key={row.id} className={`border-b border-slate-100/80 dark:border-slate-800/40 last:border-0 transition-colors ${groupColors[ci]} border-l-2 ${groupBorder[ci]}`}>
+                            <td className="px-3 py-1.5" data-cell={`outward:${idx}:0`} onKeyDown={e => handleCellKeyDown(e, 'outward', idx, 0, 5, outwardRows, setOutwardRows)}>
+                              {isFirst ? (
+                                <Select value={row.itemId} onValueChange={v => { updateRow(setOutwardRows, row.id, 'itemId', v); setTimeout(() => focusCell('outward', idx, 1), 30) }}>
+                                  <SelectTrigger className="h-7 text-xs rounded-md border-0 bg-white/70 dark:bg-slate-800/50 shadow-sm"><SelectValue placeholder="Select item" /></SelectTrigger>
+                                  <SelectContent>{items.map(i => <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>)}</SelectContent>
+                                </Select>
+                              ) : (
+                                <span className="text-[10px] text-slate-400 pl-1 italic">↳ same item</span>
+                              )}
                             </td>
-                            <td className={cp}>
-                              <Select value={row.type} onValueChange={v => updateRow(setOutwardRows, row.id, 'type', v)}>
-                                <SelectTrigger className="h-8 text-xs rounded-lg"><SelectValue placeholder="Type" /></SelectTrigger>
+                            <td className="px-3 py-1.5" data-cell={`outward:${idx}:1`} onKeyDown={e => handleCellKeyDown(e, 'outward', idx, 1, 5, outwardRows, setOutwardRows)}>
+                              <Select value={row.type} onValueChange={v => { updateRow(setOutwardRows, row.id, 'type', v); setTimeout(() => focusCell('outward', idx, 2), 30) }}>
+                                <SelectTrigger className="h-7 text-xs rounded-md border-0 bg-white/70 dark:bg-slate-800/50 shadow-sm"><SelectValue placeholder="Type" /></SelectTrigger>
                                 <SelectContent>{OUTWARD_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
                               </Select>
                             </td>
-                            <td className={cp}>
-                              <Input type="number" min="0" step="0.01" value={row.qty} onChange={e => updateRow(setOutwardRows, row.id, 'qty', e.target.value)} className="h-8 text-xs rounded-lg" placeholder="0" />
+                            <td className="px-3 py-1.5" data-cell={`outward:${idx}:2`} onKeyDown={e => handleCellKeyDown(e, 'outward', idx, 2, 5, outwardRows, setOutwardRows)}>
+                              <Input type="number" min="0" step="0.01" value={row.qty} onChange={e => updateRow(setOutwardRows, row.id, 'qty', e.target.value)} className="h-7 text-xs rounded-md border-0 bg-white/70 dark:bg-slate-800/50 shadow-sm font-semibold" placeholder="0" />
                             </td>
-                            <td className={cp}>
-                              <Select value={row.unit} onValueChange={v => updateRow(setOutwardRows, row.id, 'unit', v)}>
-                                <SelectTrigger className="h-8 text-xs rounded-lg"><SelectValue /></SelectTrigger>
+                            <td className="px-3 py-1.5" data-cell={`outward:${idx}:3`} onKeyDown={e => handleCellKeyDown(e, 'outward', idx, 3, 5, outwardRows, setOutwardRows)}>
+                              <Select value={row.unit} onValueChange={v => { updateRow(setOutwardRows, row.id, 'unit', v); setTimeout(() => focusCell('outward', idx, 4), 30) }}>
+                                <SelectTrigger className="h-7 text-xs rounded-md border-0 bg-white/70 dark:bg-slate-800/50 shadow-sm"><SelectValue /></SelectTrigger>
                                 <SelectContent>{UNITS.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent>
                               </Select>
                             </td>
-                            <td className={`${cp} bg-amber-50/40 dark:bg-amber-900/10`}>
-                              <Input value={row.remarks} onChange={e => updateRow(setOutwardRows, row.id, 'remarks', e.target.value)} className="h-8 text-xs rounded-lg bg-transparent" placeholder="Optional note…" />
+                            <td className="px-3 py-1.5 bg-amber-50/50 dark:bg-amber-900/10" data-cell={`outward:${idx}:4`} onKeyDown={e => handleCellKeyDown(e, 'outward', idx, 4, 5, outwardRows, setOutwardRows)}>
+                              <Input value={row.remarks} onChange={e => updateRow(setOutwardRows, row.id, 'remarks', e.target.value)} className="h-7 text-xs rounded-md border-0 bg-transparent" placeholder="note…" />
                             </td>
-                            <td className={cp}>
-                              <div className="flex gap-1">
-                                <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-slate-400 hover:text-red-500" onClick={() => removeRow(setOutwardRows, row.id)}><X className="h-3 w-3" /></Button>
+                            <td className="px-2 py-1.5">
+                              <div className="flex gap-0.5">
+                                <Button variant="ghost" size="icon" className="h-6 w-6 rounded text-slate-300 hover:text-red-500" onClick={() => removeRow(setOutwardRows, row.id)}><X className="h-3 w-3" /></Button>
                                 {idx === outwardRows.length - 1 && (
                                   <>
-                                    <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-slate-400 hover:text-red-500" onClick={() => addRow(setOutwardRows)} title="Add row"><Plus className="h-3 w-3" /></Button>
-                                    <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-slate-400 hover:text-red-500" onClick={() => duplicateLastRow(setOutwardRows)} title="Duplicate"><Copy className="h-3 w-3" /></Button>
+                                    <Button variant="ghost" size="icon" className="h-6 w-6 rounded text-slate-300 hover:text-red-500" onClick={() => addRow(setOutwardRows)}><Plus className="h-3 w-3" /></Button>
+                                    <Button variant="ghost" size="icon" className="h-6 w-6 rounded text-slate-300 hover:text-red-500" onClick={() => duplicateLastRow(setOutwardRows)}><Copy className="h-3 w-3" /></Button>
                                   </>
                                 )}
                               </div>
                             </td>
                           </tr>
-                        ))}
+                          )
+                        })}
                       </tbody>
                     </table>
                   </div>
+                    )
+                  })()}
                   <div className="flex items-center justify-between mt-4">
-                    <span className="text-xs text-slate-400 dark:text-slate-500">
+                    <span className="text-xs text-slate-400 dark:text-slate-500 flex items-center gap-2">
                       <span className="font-semibold text-red-500">{outwardRows.filter(r => r.itemId && r.type && r.qty).length}</span> row(s) ready to submit
+                      <span className="hidden sm:inline text-[10px] text-slate-300 dark:text-slate-600 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5">Enter / Tab → next cell &nbsp;·&nbsp; ↑↓ move rows &nbsp;·&nbsp; Enter on last cell → new row</span>
                     </span>
                     <div className="flex gap-2">
-                      <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg" onClick={() => setOutwardRows([newQuickRow()])}>Clear All</Button>
+                      <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg" onClick={() => setOutwardRows([newQuickRow(1)])}>Clear All</Button>
                       <Button size="sm" className="h-8 text-xs rounded-lg bg-red-600 hover:bg-red-700 shadow-sm shadow-red-200 dark:shadow-red-900" onClick={submitOutwardRows}>
                         <Check className="h-3 w-3 mr-1.5" />Submit ({outwardRows.filter(r => r.itemId && r.type && r.qty).length})
                       </Button>
@@ -1238,7 +1372,7 @@ export default function InventoryApp() {
                           <Button variant="outline" size="xs" className="h-6 text-[10px] rounded-md px-2 bg-amber-50/50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800" onClick={useExpectedValues}>
                             <Activity className="h-3 w-3 mr-1" />Auto-fill Expected
                           </Button>
-                          <Button variant="outline" size="xs" className="h-6 text-[10px] rounded-md px-2" onClick={() => loadChecklist(setClosingRows)}>
+                          <Button variant="outline" size="xs" className="h-6 text-[10px] rounded-md px-2" onClick={loadChecklistClosing}>
                             <Rows3 className="h-3 w-3 mr-1" />Load All Products
                           </Button>
                           <Button variant="outline" size="xs" className="h-6 text-[10px] rounded-md px-2" onClick={() => document.getElementById('closing-file-input')?.click()}>
@@ -1255,55 +1389,67 @@ export default function InventoryApp() {
                   </div>
                 </CardHeader>
                 <CardContent className="px-5 pb-5">
+                  {(() => {
+                    const groupColors = ['bg-amber-50/60 dark:bg-amber-900/10','bg-teal-50/60 dark:bg-teal-900/10','bg-violet-50/60 dark:bg-violet-900/10','bg-sky-50/60 dark:bg-sky-900/10','bg-rose-50/60 dark:bg-rose-900/10','bg-emerald-50/60 dark:bg-emerald-900/10','bg-orange-50/60 dark:bg-orange-900/10','bg-pink-50/60 dark:bg-pink-900/10']
+                    const groupBorder = ['border-l-amber-400','border-l-teal-400','border-l-violet-400','border-l-sky-400','border-l-rose-400','border-l-emerald-400','border-l-orange-400','border-l-pink-400']
+                    let groupIdx = -1; let lastItemId = ''
+                    return (
                   <div className="overflow-x-auto rounded-xl border border-slate-100 dark:border-slate-800">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-xs">
                       <thead>
                         <tr className="bg-slate-50 dark:bg-slate-800/60">
-                          <th className={`${hp} text-left text-xs font-semibold text-slate-600 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800`}>Item *</th>
-                          <th className={`${hp} text-left text-xs font-semibold text-slate-600 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800`}>Sub-Type *</th>
-                          <th className={`${hp} text-left text-xs font-semibold text-amber-600 dark:text-amber-400 border-b border-amber-100 dark:border-amber-900/50 bg-amber-50/60 dark:bg-amber-900/10 w-24`}>Qty *</th>
-                          <th className={`${hp} text-left text-xs font-semibold text-slate-600 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800 w-24`}>Unit</th>
-                          <th className={`${hp} text-left text-xs font-semibold text-amber-600 dark:text-amber-400 border-b border-amber-100 dark:border-amber-900/50 bg-amber-50/60 dark:bg-amber-900/10 w-24`}>Box</th>
-                          <th className={`${hp} w-20 border-b border-slate-100 dark:border-slate-800`}></th>
+                          <th className="px-3 py-2 text-left text-[11px] font-semibold text-slate-500 border-b border-slate-100 dark:border-slate-800 w-[200px]">Item</th>
+                          <th className="px-3 py-2 text-left text-[11px] font-semibold text-slate-500 border-b border-slate-100 dark:border-slate-800">Sub-Type</th>
+                          <th className="px-3 py-2 text-left text-[11px] font-semibold text-amber-500 border-b border-amber-100 bg-amber-50/40 dark:bg-amber-900/10 w-20">Qty *</th>
+                          <th className="px-3 py-2 text-left text-[11px] font-semibold text-slate-500 border-b border-slate-100 dark:border-slate-800 w-20">Unit</th>
+                          <th className="px-3 py-2 text-left text-[11px] font-semibold text-amber-500 border-b border-amber-100 bg-amber-50/40 dark:bg-amber-900/10 w-20">Box</th>
+                          <th className="px-2 py-2 w-14 border-b border-slate-100 dark:border-slate-800"></th>
                         </tr>
                       </thead>
                       <tbody>
                         {closingRows.map((row, idx) => {
                           const selectedItem = items.find(i => i.id === row.itemId)
                           const subTypes = selectedItem ? JSON.parse(selectedItem.subTypes || '[]') as string[] : []
+                          if (row.itemId !== lastItemId) { groupIdx++; lastItemId = row.itemId }
+                          const ci = groupIdx % groupColors.length
+                          const isFirst = idx === 0 || closingRows[idx - 1].itemId !== row.itemId
                           return (
-                            <tr key={row.id} className="border-b border-slate-50 dark:border-slate-800/50 last:border-0 hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
-                              <td className={cp}>
-                                <Select value={row.itemId} onValueChange={v => { updateRow(setClosingRows, row.id, 'itemId', v); updateRow(setClosingRows, row.id, 'type', '') }}>
-                                  <SelectTrigger className="h-8 text-xs rounded-lg"><SelectValue placeholder="Select item" /></SelectTrigger>
-                                  <SelectContent>{items.map(i => <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>)}</SelectContent>
-                                </Select>
+                            <tr key={row.id} className={`border-b border-slate-100/80 dark:border-slate-800/40 last:border-0 transition-colors ${groupColors[ci]} border-l-2 ${groupBorder[ci]}`}>
+                              <td className="px-3 py-1.5" data-cell={`closing:${idx}:0`} onKeyDown={e => handleCellKeyDown(e, 'closing', idx, 0, 5, closingRows, setClosingRows)}>
+                                {isFirst ? (
+                                  <Select value={row.itemId} onValueChange={v => { updateRow(setClosingRows, row.id, 'itemId', v); updateRow(setClosingRows, row.id, 'type', ''); setTimeout(() => focusCell('closing', idx, 1), 30) }}>
+                                    <SelectTrigger className="h-7 text-xs rounded-md border-0 bg-white/70 dark:bg-slate-800/50 shadow-sm"><SelectValue placeholder="Select item" /></SelectTrigger>
+                                    <SelectContent>{items.map(i => <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>)}</SelectContent>
+                                  </Select>
+                                ) : (
+                                  <span className="text-[10px] text-slate-400 pl-1 italic">↳ same item</span>
+                                )}
                               </td>
-                              <td className={cp}>
-                                <Select value={row.type} onValueChange={v => updateRow(setClosingRows, row.id, 'type', v)}>
-                                  <SelectTrigger className="h-8 text-xs rounded-lg"><SelectValue placeholder="Sub-type" /></SelectTrigger>
+                              <td className="px-3 py-1.5" data-cell={`closing:${idx}:1`} onKeyDown={e => handleCellKeyDown(e, 'closing', idx, 1, 5, closingRows, setClosingRows)}>
+                                <Select value={row.type} onValueChange={v => { updateRow(setClosingRows, row.id, 'type', v); setTimeout(() => focusCell('closing', idx, 2), 30) }}>
+                                  <SelectTrigger className="h-7 text-xs rounded-md border-0 bg-white/70 dark:bg-slate-800/50 shadow-sm"><SelectValue placeholder="Sub-type" /></SelectTrigger>
                                   <SelectContent>{subTypes.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
                                 </Select>
                               </td>
-                              <td className={`${cp} bg-amber-50/40 dark:bg-amber-900/10`}>
-                                <Input type="number" min="0" step="0.01" value={row.qty} onChange={e => updateRow(setClosingRows, row.id, 'qty', e.target.value)} className="h-8 text-xs rounded-lg bg-transparent" placeholder="0" />
+                              <td className="px-3 py-1.5 bg-amber-50/50 dark:bg-amber-900/10" data-cell={`closing:${idx}:2`} onKeyDown={e => handleCellKeyDown(e, 'closing', idx, 2, 5, closingRows, setClosingRows)}>
+                                <Input type="number" min="0" step="0.01" value={row.qty} onChange={e => updateRow(setClosingRows, row.id, 'qty', e.target.value)} className="h-7 text-xs rounded-md border-0 bg-transparent font-semibold" placeholder="0" />
                               </td>
-                              <td className={cp}>
-                                <Select value={row.unit} onValueChange={v => updateRow(setClosingRows, row.id, 'unit', v)}>
-                                  <SelectTrigger className="h-8 text-xs rounded-lg"><SelectValue /></SelectTrigger>
+                              <td className="px-3 py-1.5" data-cell={`closing:${idx}:3`} onKeyDown={e => handleCellKeyDown(e, 'closing', idx, 3, 5, closingRows, setClosingRows)}>
+                                <Select value={row.unit} onValueChange={v => { updateRow(setClosingRows, row.id, 'unit', v); setTimeout(() => focusCell('closing', idx, 4), 30) }}>
+                                  <SelectTrigger className="h-7 text-xs rounded-md border-0 bg-white/70 dark:bg-slate-800/50 shadow-sm"><SelectValue /></SelectTrigger>
                                   <SelectContent>{UNITS.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent>
                                 </Select>
                               </td>
-                              <td className={`${cp} bg-amber-50/40 dark:bg-amber-900/10`}>
-                                <Input value={row.box} onChange={e => updateRow(setClosingRows, row.id, 'box', e.target.value)} className="h-8 text-xs rounded-lg bg-transparent" placeholder="—" />
+                              <td className="px-3 py-1.5 bg-amber-50/50 dark:bg-amber-900/10" data-cell={`closing:${idx}:4`} onKeyDown={e => handleCellKeyDown(e, 'closing', idx, 4, 5, closingRows, setClosingRows)}>
+                                <Input value={row.box} onChange={e => updateRow(setClosingRows, row.id, 'box', e.target.value)} className="h-7 text-xs rounded-md border-0 bg-transparent" placeholder="—" />
                               </td>
-                              <td className={cp}>
-                                <div className="flex gap-1">
-                                  <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-slate-400 hover:text-red-500" onClick={() => removeRow(setClosingRows, row.id)}><X className="h-3 w-3" /></Button>
+                              <td className="px-2 py-1.5">
+                                <div className="flex gap-0.5">
+                                  <Button variant="ghost" size="icon" className="h-6 w-6 rounded text-slate-300 hover:text-red-500" onClick={() => removeRow(setClosingRows, row.id)}><X className="h-3 w-3" /></Button>
                                   {idx === closingRows.length - 1 && (
                                     <>
-                                      <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-slate-400 hover:text-amber-600" onClick={() => addRow(setClosingRows)}><Plus className="h-3 w-3" /></Button>
-                                      <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-slate-400 hover:text-amber-600" onClick={() => duplicateLastRow(setClosingRows)}><Copy className="h-3 w-3" /></Button>
+                                      <Button variant="ghost" size="icon" className="h-6 w-6 rounded text-slate-300 hover:text-amber-600" onClick={() => addRow(setClosingRows)}><Plus className="h-3 w-3" /></Button>
+                                      <Button variant="ghost" size="icon" className="h-6 w-6 rounded text-slate-300 hover:text-amber-600" onClick={() => duplicateLastRow(setClosingRows)}><Copy className="h-3 w-3" /></Button>
                                     </>
                                   )}
                                 </div>
@@ -1314,9 +1460,12 @@ export default function InventoryApp() {
                       </tbody>
                     </table>
                   </div>
+                    )
+                  })()}
                   <div className="flex items-center justify-between mt-4">
-                    <span className="text-xs text-slate-400 dark:text-slate-500">
+                    <span className="text-xs text-slate-400 dark:text-slate-500 flex items-center gap-2">
                       <span className="font-semibold text-amber-600">{closingRows.filter(r => r.itemId && r.type && r.qty).length}</span> row(s) ready to submit
+                      <span className="hidden sm:inline text-[10px] text-slate-300 dark:text-slate-600 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5">Enter / Tab → next cell &nbsp;·&nbsp; ↑↓ move rows &nbsp;·&nbsp; Enter on last cell → new row</span>
                     </span>
                     <div className="flex gap-2">
                       <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg" onClick={() => setClosingRows([newQuickRow(1)])}>Clear All</Button>

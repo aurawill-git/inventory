@@ -22,6 +22,42 @@ export type EntryWithItem = {
   item: InventoryItemWithSubTypes
 }
 
+// Per-item inward types (matches Inventory_1.xlsx exactly)
+export const ITEM_INWARD_TYPES: Record<string, string[]> = {
+  'Aurawill Health Mix':    ['From Production Unit', 'RTO'],
+  'Aurawill Cover':         ['Purchase', 'Damaged - From Production Unit'],
+  '50 Pcs Carton Box':      ['From Production Unit', 'Purchase'],
+  '1 Pc Cover (6.5*11)':   ['Purchase'],
+  '2 Pcs Carton Box':       ['Purchase'],
+  '4 Pcs Carton Box':       ['Purchase'],
+  '24 Pcs Amazon Box':      ['Purchase'],
+  'Wax Ribbon Roll':        ['Purchase'],
+  'Label Roll (500 Pcs)':   ['Purchase'],
+  'Aurawill Tape':          ['Purchase'],
+  'Batch Printer Catridge': ['Purchase'],
+  '8*12 Cover':             ['Purchase'],
+  'Cello Tape 3"':          ['Purchase'],
+  '10*12 Cover':            ['Purchase'],
+}
+
+// Per-item outward types (matches Inventory_1.xlsx exactly)
+export const ITEM_OUTWARD_TYPES: Record<string, string[]> = {
+  'Aurawill Health Mix':    ['Prepaid Orders', 'Customer Care', 'COD - Speed Post', 'COD - Business Parcel', 'Bluedart', 'Amazon', 'Meesho', 'Sample', 'Damaged', 'Offline Sales', 'Sent to Tiruchengode'],
+  'Aurawill Cover':         ['Sent to Tiruchengode', 'Used for Repacking', 'Damaged'],
+  '50 Pcs Carton Box':      ['Sent to Tiruchengode', 'Damaged'],
+  '1 Pc Cover (6.5*11)':   ['Consumed'],
+  '2 Pcs Carton Box':       ['Consumed'],
+  '4 Pcs Carton Box':       ['Consumed'],
+  '24 Pcs Amazon Box':      ['Consumed'],
+  'Wax Ribbon Roll':        ['Consumed'],
+  'Label Roll (500 Pcs)':   ['Consumed'],
+  'Aurawill Tape':          ['Consumed'],
+  'Batch Printer Catridge': ['Sent to Tiruchengode', 'Consumed'],
+  '8*12 Cover':             ['Consumed'],
+  'Cello Tape 3"':          ['Consumed'],
+  '10*12 Cover':            ['Consumed'],
+}
+
 // Inward types
 export const INWARD_TYPES = [
   'From Production Unit',
